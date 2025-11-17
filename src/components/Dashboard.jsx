@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { auth } from '../utils/auth'
 import { 
   Clock, 
   ChefHat, 
@@ -23,7 +24,8 @@ import {
   Edit,
   Image as ImageIcon,
   Bell,
-  ShoppingBag
+  ShoppingBag,
+  LogOut
 } from 'lucide-react'
 import { storage } from '../utils/storage'
 import { getMenuItems, saveMenuItems, defaultMenuItems, categories } from '../data/menu'
@@ -511,6 +513,16 @@ const Dashboard = () => {
             >
               <ArrowLeft className="w-4 h-4" />
               Customer View
+            </button>
+            <button
+              onClick={() => {
+                auth.logout()
+                navigate('/login')
+              }}
+              className="bg-red-600 hover:bg-red-700 px-4 py-2 rounded-lg font-semibold transition-colors flex items-center gap-2"
+            >
+              <LogOut className="w-4 h-4" />
+              Logout
             </button>
           </div>
         </div>

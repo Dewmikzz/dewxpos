@@ -1,12 +1,14 @@
 import { useState, useEffect } from 'react'
-import { useParams } from 'react-router-dom'
-import { ShoppingCart, Plus, Minus, X, CheckCircle } from 'lucide-react'
+import { useParams, useNavigate } from 'react-router-dom'
+import { ShoppingCart, Plus, Minus, X, CheckCircle, Lock, User, AlertCircle } from 'lucide-react'
 import { getMenuItems, categories } from '../data/menu'
 import { storage } from '../utils/storage'
+import { auth } from '../utils/auth'
 
 const TableView = () => {
   const { tableNumber } = useParams()
   const tableNum = tableNumber || '1'
+  const navigate = useNavigate()
   
   const [cart, setCart] = useState([])
   const [selectedCategory, setSelectedCategory] = useState('All')
@@ -14,6 +16,11 @@ const TableView = () => {
   const [orderPlaced, setOrderPlaced] = useState(false)
   const [orderId, setOrderId] = useState(null)
   const [menuItems, setMenuItems] = useState([])
+  const [showLoginModal, setShowLoginModal] = useState(false)
+  const [username, setUsername] = useState('')
+  const [password, setPassword] = useState('')
+  const [loginError, setLoginError] = useState('')
+  const [loginLoading, setLoginLoading] = useState(false)
 
   useEffect(() => {
     loadMenuItems()
@@ -111,6 +118,21 @@ const TableView = () => {
     setOrderId(null)
   }
 
+  const handleLogin = (e) => {
+    e.preventDefault()
+    setLoginError('')
+    setLoginLoading(true)
+
+    setTimeout(() => {
+      if (auth.login(username, password)) {
+        navigate('/dashboard')
+      } else {
+        setLoginError('Invalid username or password')
+        setLoginLoading(false)
+      }
+    }, 300)
+  }
+
   const cartItemCount = cart.reduce((sum, item) => sum + item.quantity, 0)
 
   if (orderPlaced) {
@@ -136,9 +158,19 @@ const TableView = () => {
     <div className="min-h-screen bg-gradient-to-br from-coffee-50 to-coffee-100 pb-20">
       {/* Header */}
       <div className="bg-coffee-800 text-white p-4 shadow-lg">
-        <div className="max-w-4xl mx-auto">
-          <h1 className="text-2xl font-bold">Lakopi Restaurant</h1>
-          <p className="text-coffee-200">Table {tableNum}</p>
+        <div className="max-w-4xl mx-auto flex items-center justify-between">
+          <div>
+            <h1 className="text-2xl font-bold">Lakopi Restaurant</h1>
+            <p className="text-coffee-200">Table {tableNum}</p>
+          </div>
+          <button
+            onClick={() => setShowLoginModal(true)}
+            className="bg-coffee-600 hover:bg-coffee-700 px-4 py-2 rounded-lg font-semibold transition-colors flex items-center gap-2 text-sm"
+            title="Admin Login"
+          >
+            <Lock className="w-4 h-4" />
+            Admin
+          </button>
         </div>
       </div>
 
@@ -287,6 +319,91 @@ const TableView = () => {
                 </div>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Admin Login Modal */}
+      {showLoginModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-8">
+            <div className="text-center mb-6">
+              <div className="bg-coffee-600 w-12 h-12 rounded-full flex items-center justify-center mx-auto mb-3">
+                <Lock className="w-6 h-6 text-white" />
+              </div>
+              <h2 className="text-2xl font-bold text-coffee-800 mb-1">Admin Login</h2>
+              <p className="text-coffee-600 text-sm">Access Dashboard</p>
+            </div>
+
+            {loginError && (
+              <div className="mb-4 bg-red-50 border-2 border-red-200 rounded-lg p-3 flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 text-red-600 flex-shrink-0" />
+                <p className="text-red-800 text-sm">{loginError}</p>
+              </div>
+            )}
+
+            <form onSubmit={handleLogin} className="space-y-4">
+              <div>
+                <label className="block text-sm font-semibold text-coffee-800 mb-2">
+                  Username
+                </label>
+                <div className="relative">
+                  <User className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-coffee-400" />
+                  <input
+                    type="text"
+                    value={username}
+                    onChange={(e) => setUsername(e.target.value)}
+                    className="w-full pl-10 pr-4 py-2 border-2 border-coffee-200 rounded-lg focus:border-coffee-500 focus:outline-none text-coffee-800"
+                    placeholder="Enter username"
+                    required
+                    autoFocus
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-semibold text-coffee-800 mb-2">
+                  Password
+                </label>
+                <div className="relative">
+                  <Lock className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-coffee-400" />
+                  <input
+                    type="password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    className="w-full pl-10 pr-4 py-2 border-2 border-coffee-200 rounded-lg focus:border-coffee-500 focus:outline-none text-coffee-800"
+                    placeholder="Enter password"
+                    required
+                  />
+                </div>
+              </div>
+
+              <div className="flex gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowLoginModal(false)
+                    setUsername('')
+                    setPassword('')
+                    setLoginError('')
+                  }}
+                  className="flex-1 bg-coffee-200 text-coffee-800 py-2 px-4 rounded-lg font-semibold hover:bg-coffee-300 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={loginLoading}
+                  className={`flex-1 py-2 px-4 rounded-lg font-semibold text-white transition-colors ${
+                    loginLoading
+                      ? 'bg-coffee-400 cursor-not-allowed'
+                      : 'bg-coffee-600 hover:bg-coffee-700'
+                  }`}
+                >
+                  {loginLoading ? 'Logging in...' : 'Login'}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
