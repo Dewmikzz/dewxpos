@@ -111,7 +111,24 @@ const TableView = () => {
     }
 
     const existingOrders = storage.get('orders', true) || []
-    storage.set('orders', [...existingOrders, newOrder], true)
+    const updatedOrders = [...existingOrders, newOrder]
+    
+    // Save to storage (this will dispatch the storageUpdate event)
+    storage.set('orders', updatedOrders, true)
+    
+    // Manually trigger storage event for cross-tab communication
+    // The native storage event only fires in OTHER tabs, so we need to manually trigger it
+    // by setting a dummy value and then setting the real value
+    const storageKey = 'lakopi_shared_orders'
+    const oldValue = localStorage.getItem(storageKey)
+    localStorage.setItem(storageKey, JSON.stringify(updatedOrders))
+    
+    // Also dispatch custom event explicitly for same-tab listeners
+    window.dispatchEvent(new CustomEvent('storageUpdate', {
+      detail: { key: storageKey, value: updatedOrders }
+    }))
+    
+    console.log('Order placed:', newOrder.id, 'Total orders:', updatedOrders.length)
     
     setOrderId(newOrder.id)
     setOrderPlaced(true)

@@ -132,20 +132,39 @@ const Dashboard = () => {
     }
     
     // Listen for storage updates
-    const handleStorageUpdate = () => {
-      loadOrders()
+    const handleStorageUpdate = (event) => {
+      // Check if this is an orders update
+      const isOrdersUpdate = event && (
+        (event.detail && event.detail.key === 'lakopi_shared_orders') ||
+        (event.key === 'lakopi_shared_orders')
+      )
+      
+      if (isOrdersUpdate || !event) {
+        // If no event details, reload anyway (might be from custom event)
+        console.log('Storage update detected, reloading orders...', event?.detail || event?.key)
+        loadOrders()
+      }
     }
     
     const handleMenuUpdate = () => {
       loadMenuItems()
     }
     
+    // Listen to custom events (same tab)
     window.addEventListener('storageUpdate', handleStorageUpdate)
-    window.addEventListener('storage', handleStorageUpdate)
+    // Listen to native storage events (other tabs/windows)
+    window.addEventListener('storage', (e) => {
+      if (e.key === 'lakopi_shared_orders') {
+        console.log('Native storage event detected, reloading orders...')
+        loadOrders()
+      }
+    })
     window.addEventListener('menuUpdate', handleMenuUpdate)
     
-    // Poll for updates (fallback)
-    const interval = setInterval(loadOrders, 2000)
+    // Poll for updates (fallback) - reduced to 1 second for better real-time sync
+    const interval = setInterval(() => {
+      loadOrders()
+    }, 1000)
     
     return () => {
       document.removeEventListener('click', handleUserInteraction)
