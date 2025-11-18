@@ -124,27 +124,58 @@ export const firebaseDB = {
     }
     try {
       const dbRef = ref(database, path)
-      console.log('👂 Firebase: Listening to', path)
-      onValue(dbRef, (snapshot) => {
+      console.log('👂 Firebase: Setting up listener for', path)
+      console.log('📡 Firebase: Database URL:', database.app.options.databaseURL)
+      console.log('📡 Firebase: Database connected:', database._databaseId?.database)
+      
+      // Set up listener - this fires immediately with current data AND on every change
+      const unsubscribe = onValue(dbRef, (snapshot) => {
+        const timestamp = new Date().toISOString()
+        console.log(`📡 [${timestamp}] Firebase listener fired for ${path}`)
+        
         if (snapshot.exists()) {
           const data = snapshot.val()
-          console.log('📡 Firebase: Data updated at', path, data)
+          console.log('✅ Firebase: Data received at', path, '- Type:', Array.isArray(data) ? 'array' : typeof data)
+          console.log('📦 Firebase: Data snapshot:', JSON.stringify(data).substring(0, 200) + '...')
+          
+          // Check data size
+          if (Array.isArray(data)) {
+            console.log('📊 Firebase: Array with', data.length, 'items')
+          } else if (typeof data === 'object' && data !== null) {
+            const keys = Object.keys(data)
+            console.log('📊 Firebase: Object with', keys.length, 'keys:', keys.slice(0, 5))
+          }
+          
           callback(data)
         } else {
-          console.log('📡 Firebase: Data removed at', path)
+          console.log('⚠️ Firebase: No data at', path, '(path does not exist yet)')
           callback(null)
         }
       }, (error) => {
-        console.error('❌ Firebase: Error listening to', path, error)
+        console.error('❌ Firebase: Error in listener for', path, ':', error)
+        console.error('❌ Error code:', error.code)
+        console.error('❌ Error message:', error.message)
+        console.error('❌ Full error:', error)
+        
+        // Try to reconnect or handle error
+        if (error.code === 'PERMISSION_DENIED') {
+          console.error('🔒 PERMISSION_DENIED: Check database rules!')
+        } else if (error.code === 'UNAVAILABLE') {
+          console.error('🌐 UNAVAILABLE: Check internet connection!')
+        }
       })
+      
+      console.log('✅ Firebase: Listener successfully attached to', path)
       
       // Return unsubscribe function
       return () => {
-        console.log('🔇 Firebase: Stopped listening to', path)
+        console.log('🔇 Firebase: Unsubscribing from', path)
+        unsubscribe()
         off(dbRef)
       }
     } catch (error) {
       console.error('❌ Firebase: Error setting up listener:', error)
+      console.error('❌ Error details:', error.message, error.stack)
       throw error
     }
   },

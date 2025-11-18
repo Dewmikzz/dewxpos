@@ -89,14 +89,32 @@ const Dashboard = () => {
     let firebaseUnsubscribe = null
     if (firebaseStorage.isFirebaseAvailable()) {
       console.log('✅ Setting up Firebase real-time listener for orders')
+      console.log('🌐 Firebase is available - cross-device sync enabled')
+      
+      // Set up listener - this will fire immediately with current data AND on every change
       firebaseUnsubscribe = firebaseStorage.onOrdersChange((orders) => {
-        console.log('📡 Firebase: Orders updated in real-time:', orders?.length || 0, 'orders')
+        const timestamp = new Date().toISOString()
+        console.log(`📡 [${timestamp}] Firebase listener callback triggered!`)
+        console.log('📡 Firebase: Orders received from real-time listener:', orders?.length || 0, 'orders')
+        console.log('📡 Orders data:', orders)
+        
         if (orders && Array.isArray(orders)) {
+          console.log('✅ Processing', orders.length, 'orders from Firebase real-time listener')
           loadOrdersFromData(orders)
+        } else if (orders === null) {
+          console.log('⚠️ Firebase returned null - no orders yet, using empty array')
+          loadOrdersFromData([])
+        } else {
+          console.warn('⚠️ Unexpected orders format:', typeof orders, orders)
+          loadOrdersFromData(Array.isArray(orders) ? orders : [])
         }
       })
+      
+      console.log('✅ Firebase real-time listener setup complete')
     } else {
       console.log('⚠️ Firebase not available - using localStorage polling (single-device mode)')
+      console.log('⚠️ Cross-device sync will NOT work - Firebase must be configured')
+      console.log('⚠️ Make sure .env file exists with Firebase credentials')
     }
     
     // Initialize AudioContext on user interaction (required by browser autoplay policy)
@@ -185,10 +203,14 @@ const Dashboard = () => {
     })
     window.addEventListener('menuUpdate', handleMenuUpdate)
     
-    // Poll for updates (fallback) - reduced to 1 second for better real-time sync
-    const interval = setInterval(() => {
-      loadOrders()
-    }, 1000)
+    // Poll for updates (fallback) - only if Firebase is not available
+    // If Firebase is available, we don't need polling (Firebase handles real-time)
+    const interval = firebaseStorage.isFirebaseAvailable() 
+      ? null // No polling needed - Firebase handles real-time
+      : setInterval(() => {
+          console.log('🔄 Polling for orders (Firebase not available)')
+          loadOrders()
+        }, 2000) // Poll every 2 seconds if Firebase not available
     
     return () => {
       document.removeEventListener('click', handleUserInteraction)
@@ -196,7 +218,9 @@ const Dashboard = () => {
       window.removeEventListener('storageUpdate', handleStorageUpdate)
       window.removeEventListener('storage', handleStorageUpdate)
       window.removeEventListener('menuUpdate', handleMenuUpdate)
-      clearInterval(interval)
+      if (interval) {
+        clearInterval(interval)
+      }
       // Cancel any ongoing speech when component unmounts
       if ('speechSynthesis' in window) {
         window.speechSynthesis.cancel()
