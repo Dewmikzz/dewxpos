@@ -70,6 +70,16 @@ const Dashboard = () => {
   const audioContextRef = useRef(null)
 
   useEffect(() => {
+    // Initialize menu first to ensure it's available
+    const initializeMenuFirst = () => {
+      const stored = storage.get('menuItems', true)
+      if (!stored || !Array.isArray(stored) || stored.length === 0) {
+        console.log('Initializing menu items...')
+        storage.set('menuItems', defaultMenuItems, true)
+      }
+    }
+    initializeMenuFirst()
+    
     loadOrders()
     loadMenuItems()
     
@@ -156,10 +166,19 @@ const Dashboard = () => {
   }, [])
 
   const loadMenuItems = () => {
-    const stored = storage.get('menuItems', true)
-    if (stored && stored.length > 0) {
-      setMenuItems(stored)
-    } else {
+    try {
+      const stored = storage.get('menuItems', true)
+      if (stored && Array.isArray(stored) && stored.length > 0) {
+        setMenuItems(stored)
+      } else {
+        // If no stored menu or invalid, use defaults
+        console.log('No menu items in storage, using defaults')
+        setMenuItems(defaultMenuItems)
+        storage.set('menuItems', defaultMenuItems, true)
+      }
+    } catch (error) {
+      console.error('Error loading menu items:', error)
+      // Fallback to defaults on error
       setMenuItems(defaultMenuItems)
       storage.set('menuItems', defaultMenuItems, true)
     }

@@ -28,11 +28,23 @@ const TableView = () => {
   }, [])
 
   const loadMenuItems = () => {
-    const stored = storage.get('menuItems', true)
-    if (stored && stored.length > 0) {
-      setMenuItems(stored)
-    } else {
-      setMenuItems(getMenuItems())
+    try {
+      const stored = storage.get('menuItems', true)
+      if (stored && Array.isArray(stored) && stored.length > 0) {
+        setMenuItems(stored)
+      } else {
+        // If no stored menu or invalid, use defaults
+        console.log('No menu items in storage, using defaults')
+        const defaultItems = getMenuItems()
+        setMenuItems(defaultItems)
+        storage.set('menuItems', defaultItems, true)
+      }
+    } catch (error) {
+      console.error('Error loading menu items:', error)
+      // Fallback to defaults on error
+      const defaultItems = getMenuItems()
+      setMenuItems(defaultItems)
+      storage.set('menuItems', defaultItems, true)
     }
   }
 
