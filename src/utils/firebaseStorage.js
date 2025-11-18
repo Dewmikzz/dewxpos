@@ -27,10 +27,25 @@ export const firebaseStorage = {
         const path = STORAGE_PATHS[key] || key
         const data = await firebaseDB.get(path)
         if (data !== null) {
+          // Firebase sometimes stores arrays as objects with numeric keys
+          // Convert object with numeric keys back to array if needed
+          let processedData = data
+          if (!Array.isArray(data) && typeof data === 'object') {
+            // Check if it's an object with numeric keys (Firebase array format)
+            const keys = Object.keys(data)
+            const allNumericKeys = keys.every(key => /^\d+$/.test(key))
+            
+            if (allNumericKeys) {
+              // Convert object with numeric keys to array
+              processedData = keys.map(key => data[key]).filter(item => item !== null && item !== undefined)
+              console.log('✅ Converted Firebase object to array for', key, ':', processedData.length, 'items')
+            }
+          }
+          
           // Sync to localStorage as backup
           const storageKey = `lakopi_shared_${key}`
-          localStorage.setItem(storageKey, JSON.stringify(data))
-          return data
+          localStorage.setItem(storageKey, JSON.stringify(processedData))
+          return processedData
         }
       } catch (error) {
         console.error(`Error getting ${key} from Firebase:`, error)
@@ -139,32 +154,67 @@ export const firebaseStorage = {
     if (firebaseDB.isAvailable()) {
       // Remove existing listener if any
       if (listeners.orders) {
+        console.log('🔇 Removing existing orders listener')
         firebaseDB.off(STORAGE_PATHS.orders)
       }
       
       // Set up new listener
+      console.log('👂 Setting up Firebase listener for orders at path:', STORAGE_PATHS.orders)
       listeners.orders = firebaseDB.onValue(STORAGE_PATHS.orders, (data) => {
+        console.log('📡 Firebase listener triggered! Data received:', data)
+        
         if (data !== null) {
+          // Firebase sometimes stores arrays as objects with numeric keys
+          // Convert object with numeric keys back to array if needed
+          let ordersArray = data
+          if (!Array.isArray(data) && typeof data === 'object') {
+            console.log('⚠️ Firebase returned object instead of array, converting...', data)
+            // Check if it's an object with numeric keys (Firebase array format)
+            const keys = Object.keys(data)
+            const allNumericKeys = keys.every(key => /^\d+$/.test(key))
+            
+            if (allNumericKeys) {
+              // Convert object with numeric keys to array
+              ordersArray = keys.map(key => data[key]).filter(item => item !== null && item !== undefined)
+              console.log('✅ Converted Firebase object to array:', ordersArray.length, 'orders')
+            } else {
+              // It's a regular object, wrap it in an array
+              ordersArray = [data]
+              console.log('⚠️ Single object detected, wrapped in array')
+            }
+          }
+          
+          // Ensure it's an array
+          if (!Array.isArray(ordersArray)) {
+            console.warn('⚠️ Data is not an array, defaulting to empty array. Data:', ordersArray)
+            ordersArray = []
+          }
+          
+          console.log('📦 Processing', ordersArray.length, 'orders from Firebase')
+          
           // Sync to localStorage
           const storageKey = 'lakopi_shared_orders'
-          localStorage.setItem(storageKey, JSON.stringify(data))
+          localStorage.setItem(storageKey, JSON.stringify(ordersArray))
           
           // Dispatch custom event
           window.dispatchEvent(new CustomEvent('storageUpdate', {
-            detail: { key: storageKey, value: data }
+            detail: { key: storageKey, value: ordersArray }
           }))
           
-          // Call callback
-          callback(data)
+          // Call callback with array
+          callback(ordersArray)
         } else {
+          console.log('📡 Firebase: No orders data (null), returning empty array')
           callback([])
         }
       })
       
+      console.log('✅ Firebase listener set up successfully')
       return listeners.orders // Return unsubscribe function
     }
     
     // Firebase not available - return no-op function
+    console.warn('⚠️ Firebase not available - cannot set up real-time listener')
     return () => {}
   },
 
