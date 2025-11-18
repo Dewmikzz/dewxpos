@@ -1,14 +1,13 @@
 import { useState, useEffect } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
-import { ShoppingCart, Plus, Minus, X, CheckCircle, Lock, User, AlertCircle } from 'lucide-react'
+import { useParams } from 'react-router-dom'
+import { ShoppingCart, Plus, Minus, X, CheckCircle } from 'lucide-react'
 import { getMenuItems, categories } from '../data/menu'
 import { storage } from '../utils/storage'
-import { auth } from '../utils/auth'
+import Logo from './Logo'
 
 const TableView = () => {
   const { tableNumber } = useParams()
   const tableNum = tableNumber || '1'
-  const navigate = useNavigate()
   
   const [cart, setCart] = useState([])
   const [selectedCategory, setSelectedCategory] = useState('All')
@@ -16,11 +15,6 @@ const TableView = () => {
   const [orderPlaced, setOrderPlaced] = useState(false)
   const [orderId, setOrderId] = useState(null)
   const [menuItems, setMenuItems] = useState([])
-  const [showLoginModal, setShowLoginModal] = useState(false)
-  const [username, setUsername] = useState('')
-  const [password, setPassword] = useState('')
-  const [loginError, setLoginError] = useState('')
-  const [loginLoading, setLoginLoading] = useState(false)
 
   useEffect(() => {
     loadMenuItems()
@@ -118,34 +112,19 @@ const TableView = () => {
     setOrderId(null)
   }
 
-  const handleLogin = (e) => {
-    e.preventDefault()
-    setLoginError('')
-    setLoginLoading(true)
-
-    setTimeout(() => {
-      if (auth.login(username, password)) {
-        navigate('/dashboard')
-      } else {
-        setLoginError('Invalid username or password')
-        setLoginLoading(false)
-      }
-    }, 300)
-  }
-
   const cartItemCount = cart.reduce((sum, item) => sum + item.quantity, 0)
 
   if (orderPlaced) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-coffee-100 to-coffee-200 flex items-center justify-center p-4">
-        <div className="bg-white rounded-2xl shadow-2xl p-8 max-w-md w-full text-center">
-          <CheckCircle className="w-20 h-20 text-green-500 mx-auto mb-4" />
-          <h2 className="text-3xl font-bold text-coffee-800 mb-2">Order Placed!</h2>
-          <p className="text-coffee-600 mb-4">Your order has been sent to the kitchen.</p>
-          <p className="text-sm text-coffee-500 mb-6">Order ID: {orderId}</p>
+      <div className="min-h-screen bg-gradient-to-br from-green-50 to-green-100 flex items-center justify-center p-4 animate-fade-in">
+        <div className="bg-white rounded-2xl shadow-2xl p-8 max-w-md w-full text-center animate-scale-in">
+          <CheckCircle className="w-20 h-20 text-green-500 mx-auto mb-4 animate-bounce-slow" />
+          <h2 className="text-3xl font-bold text-green-800 mb-2">Order Placed!</h2>
+          <p className="text-green-600 mb-4">Your order has been sent to the kitchen.</p>
+          <p className="text-sm text-green-500 mb-6">Order ID: {orderId}</p>
           <button
             onClick={handleNewOrder}
-            className="w-full bg-coffee-600 text-white py-3 px-6 rounded-lg font-semibold hover:bg-coffee-700 transition-colors"
+            className="w-full bg-gradient-to-r from-green-600 to-green-700 text-white py-3 px-6 rounded-xl font-semibold hover:from-green-700 hover:to-green-800 transition-all shadow-lg hover:shadow-xl hover-scale"
           >
             Place Another Order
           </button>
@@ -155,36 +134,37 @@ const TableView = () => {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-coffee-50 to-coffee-100 pb-20">
+    <div className="min-h-screen bg-gradient-to-br from-green-50 via-emerald-50 via-white to-green-50 pb-20 relative overflow-hidden">
+      {/* Background Pattern Overlay */}
+      <div className="absolute inset-0 opacity-5 pointer-events-none">
+        <div className="absolute inset-0" style={{
+          backgroundImage: `url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%2310b981' fill-opacity='1'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E")`,
+          backgroundSize: '60px 60px'
+        }}></div>
+      </div>
+      <div className="relative z-10">
       {/* Header */}
-      <div className="bg-coffee-800 text-white p-4 shadow-lg">
-        <div className="max-w-4xl mx-auto flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold">Lakopi Restaurant</h1>
-            <p className="text-coffee-200">Table {tableNum}</p>
+      <div className="bg-gradient-to-r from-green-800 to-green-900 text-white p-3 sm:p-4 shadow-xl animate-fade-in">
+        <div className="max-w-4xl mx-auto flex items-center gap-2 sm:gap-4">
+          <Logo className="w-24 sm:w-32 h-8 sm:h-10" />
+          <div className="border-l border-green-300 pl-2 sm:pl-4">
+            <p className="text-green-200 text-xs sm:text-sm font-medium">Table {tableNum}</p>
           </div>
-          <button
-            onClick={() => setShowLoginModal(true)}
-            className="bg-coffee-600 hover:bg-coffee-700 px-4 py-2 rounded-lg font-semibold transition-colors flex items-center gap-2 text-sm"
-            title="Admin Login"
-          >
-            <Lock className="w-4 h-4" />
-            Admin
-          </button>
         </div>
       </div>
 
       {/* Category Filter */}
-      <div className="max-w-4xl mx-auto p-4">
-        <div className="flex gap-2 overflow-x-auto pb-2">
-          {categories.map(category => (
+      <div className="max-w-4xl mx-auto p-2 sm:p-4 animate-fade-in-up">
+        <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide -mx-2 sm:mx-0 px-2 sm:px-0">
+          {categories.map((category, index) => (
             <button
               key={category}
               onClick={() => setSelectedCategory(category)}
-              className={`px-4 py-2 rounded-full font-medium whitespace-nowrap transition-colors ${
+              style={{ animationDelay: `${index * 0.05}s` }}
+              className={`px-4 py-2 rounded-full font-medium whitespace-nowrap transition-bounce animate-fade-in-up ${
                 selectedCategory === category
-                  ? 'bg-coffee-600 text-white'
-                  : 'bg-white text-coffee-700 hover:bg-coffee-100'
+                  ? 'bg-gradient-to-r from-green-600 to-green-700 text-white shadow-lg scale-105'
+                  : 'bg-white text-green-800 hover:bg-green-50 hover-lift shadow-md'
               }`}
             >
               {category}
@@ -194,35 +174,40 @@ const TableView = () => {
       </div>
 
       {/* Menu Grid */}
-      <div className="max-w-4xl mx-auto p-4">
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {filteredMenu.map(item => (
+      <div className="max-w-4xl mx-auto p-2 sm:p-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4 lg:gap-6">
+          {filteredMenu.map((item, index) => (
             <div
               key={item.id}
-              className="bg-white rounded-xl shadow-md overflow-hidden hover:shadow-xl transition-shadow"
+              style={{ animationDelay: `${index * 0.1}s` }}
+              className="bg-white rounded-2xl shadow-lg overflow-hidden hover-lift animate-fade-in-up group cursor-pointer"
             >
-              <div className="relative h-48 bg-coffee-100 overflow-hidden">
+              <div className="relative h-48 bg-gradient-to-br from-green-50 to-green-100 overflow-hidden">
                 <img
                   src={item.image}
                   alt={item.name}
-                  className="w-full h-full object-cover"
+                  className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110"
                   onError={(e) => {
                     e.target.src = 'https://via.placeholder.com/400x300?text=No+Image'
                   }}
                 />
+                <div className="absolute inset-0 bg-gradient-to-t from-black/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity"></div>
+                <div className="absolute top-2 right-2 bg-green-600 text-white px-2 py-1 rounded-full text-xs font-semibold opacity-0 group-hover:opacity-100 transition-opacity animate-scale-in">
+                  {item.category}
+                </div>
               </div>
-              <div className="p-4">
-                <h3 className="text-xl font-bold text-coffee-800 mb-1">{item.name}</h3>
-                <p className="text-coffee-500 text-sm mb-1">{item.category}</p>
+              <div className="p-5">
+                <h3 className="text-xl font-bold text-green-900 mb-1 group-hover:text-green-700 transition-colors">{item.name}</h3>
                 {item.description && (
-                  <p className="text-coffee-600 text-xs mb-2 line-clamp-2">{item.description}</p>
+                  <p className="text-green-600 text-xs mb-3 line-clamp-2">{item.description}</p>
                 )}
                 <div className="flex items-center justify-between">
-                  <span className="text-2xl font-bold text-coffee-700">RM {item.price.toFixed(2)}</span>
+                  <span className="text-2xl font-bold text-green-700">RM {item.price.toFixed(2)}</span>
                   <button
                     onClick={() => addToCart(item)}
-                    className="bg-coffee-600 text-white px-4 py-2 rounded-lg hover:bg-coffee-700 transition-colors font-semibold"
+                    className="bg-gradient-to-r from-green-600 to-green-700 text-white px-5 py-2 rounded-xl hover:from-green-700 hover:to-green-800 transition-all font-semibold shadow-md hover:shadow-lg hover-scale"
                   >
+                    <Plus className="w-4 h-4 inline mr-1" />
                     Add
                   </button>
                 </div>
@@ -236,10 +221,10 @@ const TableView = () => {
       {cartItemCount > 0 && (
         <button
           onClick={() => setShowCart(true)}
-          className="fixed bottom-6 right-6 bg-coffee-600 text-white p-4 rounded-full shadow-2xl hover:bg-coffee-700 transition-all transform hover:scale-110 z-50"
+          className="fixed bottom-6 right-6 bg-gradient-to-r from-green-600 to-green-700 text-white p-5 rounded-full shadow-2xl hover:from-green-700 hover:to-green-800 transition-bounce transform hover:scale-110 z-50 animate-bounce-slow"
         >
           <ShoppingCart className="w-6 h-6" />
-          <span className="absolute -top-2 -right-2 bg-red-500 text-white text-xs font-bold rounded-full w-6 h-6 flex items-center justify-center">
+          <span className="absolute -top-2 -right-2 bg-red-500 text-white text-xs font-bold rounded-full w-7 h-7 flex items-center justify-center animate-pulse-slow shadow-lg">
             {cartItemCount}
           </span>
         </button>
@@ -247,13 +232,13 @@ const TableView = () => {
 
       {/* Cart Modal */}
       {showCart && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-end sm:items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[90vh] overflow-hidden flex flex-col">
-            <div className="p-6 border-b border-coffee-200 flex justify-between items-center">
-              <h2 className="text-2xl font-bold text-coffee-800">Your Cart</h2>
+        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-end sm:items-center justify-center p-4 animate-fade-in">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[90vh] overflow-hidden flex flex-col animate-scale-in">
+            <div className="p-6 border-b border-green-200 flex justify-between items-center bg-gradient-to-r from-green-50 to-white">
+              <h2 className="text-2xl font-bold text-green-800">Your Cart</h2>
               <button
                 onClick={() => setShowCart(false)}
-                className="text-coffee-600 hover:text-coffee-800"
+                className="text-green-600 hover:text-green-800 transition-colors hover-scale"
               >
                 <X className="w-6 h-6" />
               </button>
@@ -261,32 +246,32 @@ const TableView = () => {
             
             <div className="flex-1 overflow-y-auto p-6">
               {cart.length === 0 ? (
-                <p className="text-center text-coffee-500 py-8">Your cart is empty</p>
+                <p className="text-center text-green-500 py-8">Your cart is empty</p>
               ) : (
                 <div className="space-y-4">
-                  {cart.map(item => (
-                    <div key={item.id} className="flex items-center justify-between bg-coffee-50 p-4 rounded-lg">
+                  {cart.map((item, idx) => (
+                    <div key={item.id} className="flex items-center justify-between bg-green-50 p-4 rounded-xl hover-lift animate-fade-in-up" style={{ animationDelay: `${idx * 0.05}s` }}>
                       <div className="flex-1">
-                        <h3 className="font-semibold text-coffee-800">{item.name}</h3>
-                        <p className="text-coffee-600">RM {item.price} each</p>
+                        <h3 className="font-semibold text-green-800">{item.name}</h3>
+                        <p className="text-green-600">RM {item.price.toFixed(2)} each</p>
                       </div>
                       <div className="flex items-center gap-3">
                         <button
                           onClick={() => updateQuantity(item.id, -1)}
-                          className="bg-coffee-200 text-coffee-800 w-8 h-8 rounded-full flex items-center justify-center hover:bg-coffee-300"
+                          className="bg-green-200 text-green-800 w-8 h-8 rounded-full flex items-center justify-center hover:bg-green-300 transition-colors hover-scale"
                         >
                           <Minus className="w-4 h-4" />
                         </button>
-                        <span className="font-bold text-coffee-800 w-8 text-center">{item.quantity}</span>
+                        <span className="font-bold text-green-800 w-8 text-center">{item.quantity}</span>
                         <button
                           onClick={() => updateQuantity(item.id, 1)}
-                          className="bg-coffee-200 text-coffee-800 w-8 h-8 rounded-full flex items-center justify-center hover:bg-coffee-300"
+                          className="bg-green-200 text-green-800 w-8 h-8 rounded-full flex items-center justify-center hover:bg-green-300 transition-colors hover-scale"
                         >
                           <Plus className="w-4 h-4" />
                         </button>
                         <button
                           onClick={() => removeFromCart(item.id)}
-                          className="ml-2 text-red-500 hover:text-red-700"
+                          className="ml-2 text-red-500 hover:text-red-700 transition-colors hover-scale"
                         >
                           <X className="w-5 h-5" />
                         </button>
@@ -298,21 +283,21 @@ const TableView = () => {
             </div>
 
             {cart.length > 0 && (
-              <div className="p-6 border-t border-coffee-200 space-y-4">
+              <div className="p-6 border-t border-green-200 space-y-4 bg-gradient-to-r from-green-50 to-white">
                 <div className="flex justify-between items-center">
-                  <span className="text-xl font-semibold text-coffee-800">Subtotal:</span>
-                  <span className="text-2xl font-bold text-coffee-700">RM {getTotal().toFixed(2)}</span>
+                  <span className="text-xl font-semibold text-green-800">Subtotal:</span>
+                  <span className="text-2xl font-bold text-green-700">RM {getTotal().toFixed(2)}</span>
                 </div>
                 <div className="flex gap-2">
                   <button
                     onClick={clearCart}
-                    className="flex-1 bg-coffee-200 text-coffee-800 py-3 px-4 rounded-lg font-semibold hover:bg-coffee-300 transition-colors"
+                    className="flex-1 bg-green-200 text-green-800 py-3 px-4 rounded-xl font-semibold hover:bg-green-300 transition-all hover-scale shadow-md"
                   >
                     Clear Cart
                   </button>
                   <button
                     onClick={placeOrder}
-                    className="flex-1 bg-coffee-600 text-white py-3 px-4 rounded-lg font-semibold hover:bg-coffee-700 transition-colors"
+                    className="flex-1 bg-gradient-to-r from-green-600 to-green-700 text-white py-3 px-4 rounded-xl font-semibold hover:from-green-700 hover:to-green-800 transition-all shadow-lg hover:shadow-xl hover-scale"
                   >
                     Confirm Order
                   </button>
@@ -323,90 +308,14 @@ const TableView = () => {
         </div>
       )}
 
-      {/* Admin Login Modal */}
-      {showLoginModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-8">
-            <div className="text-center mb-6">
-              <div className="bg-coffee-600 w-12 h-12 rounded-full flex items-center justify-center mx-auto mb-3">
-                <Lock className="w-6 h-6 text-white" />
-              </div>
-              <h2 className="text-2xl font-bold text-coffee-800 mb-1">Admin Login</h2>
-              <p className="text-coffee-600 text-sm">Access Dashboard</p>
-            </div>
-
-            {loginError && (
-              <div className="mb-4 bg-red-50 border-2 border-red-200 rounded-lg p-3 flex items-center gap-2">
-                <AlertCircle className="w-4 h-4 text-red-600 flex-shrink-0" />
-                <p className="text-red-800 text-sm">{loginError}</p>
-              </div>
-            )}
-
-            <form onSubmit={handleLogin} className="space-y-4">
-              <div>
-                <label className="block text-sm font-semibold text-coffee-800 mb-2">
-                  Username
-                </label>
-                <div className="relative">
-                  <User className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-coffee-400" />
-                  <input
-                    type="text"
-                    value={username}
-                    onChange={(e) => setUsername(e.target.value)}
-                    className="w-full pl-10 pr-4 py-2 border-2 border-coffee-200 rounded-lg focus:border-coffee-500 focus:outline-none text-coffee-800"
-                    placeholder="Enter username"
-                    required
-                    autoFocus
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-sm font-semibold text-coffee-800 mb-2">
-                  Password
-                </label>
-                <div className="relative">
-                  <Lock className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-coffee-400" />
-                  <input
-                    type="password"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    className="w-full pl-10 pr-4 py-2 border-2 border-coffee-200 rounded-lg focus:border-coffee-500 focus:outline-none text-coffee-800"
-                    placeholder="Enter password"
-                    required
-                  />
-                </div>
-              </div>
-
-              <div className="flex gap-3 pt-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowLoginModal(false)
-                    setUsername('')
-                    setPassword('')
-                    setLoginError('')
-                  }}
-                  className="flex-1 bg-coffee-200 text-coffee-800 py-2 px-4 rounded-lg font-semibold hover:bg-coffee-300 transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={loginLoading}
-                  className={`flex-1 py-2 px-4 rounded-lg font-semibold text-white transition-colors ${
-                    loginLoading
-                      ? 'bg-coffee-400 cursor-not-allowed'
-                      : 'bg-coffee-600 hover:bg-coffee-700'
-                  }`}
-                >
-                  {loginLoading ? 'Logging in...' : 'Login'}
-                </button>
-              </div>
-            </form>
-          </div>
+      {/* Footer */}
+      <footer className="bg-gradient-to-r from-green-800 to-green-900 text-white py-4 mt-8">
+        <div className="max-w-4xl mx-auto px-4 text-center">
+          <p className="text-green-200 text-sm mb-1">Powered by <span className="font-semibold">DewX IT Solution</span></p>
+          <p className="text-green-300 text-xs">Email: dewmika.my@gmail.com</p>
         </div>
-      )}
+      </footer>
+      </div>
     </div>
   )
 }

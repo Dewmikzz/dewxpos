@@ -1,6 +1,7 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { auth } from '../utils/auth'
+import Logo from './Logo'
 import { 
   Clock, 
   ChefHat, 
@@ -25,7 +26,10 @@ import {
   Image as ImageIcon,
   Bell,
   ShoppingBag,
-  LogOut
+  LogOut,
+  ArrowRight,
+  Move,
+  Receipt as ReceiptIcon
 } from 'lucide-react'
 import { storage } from '../utils/storage'
 import { getMenuItems, saveMenuItems, defaultMenuItems, categories } from '../data/menu'
@@ -36,6 +40,14 @@ const Dashboard = () => {
   const [selectedOrder, setSelectedOrder] = useState(null)
   const [viewMode, setViewMode] = useState('tables') // 'tables', 'orders', 'report', or 'menu'
   const [selectedTable, setSelectedTable] = useState(null)
+  const [showTableManagement, setShowTableManagement] = useState(false)
+  const [tableCart, setTableCart] = useState([])
+  const [showBill, setShowBill] = useState(false)
+  const [moveItemModal, setMoveItemModal] = useState(null)
+  const [cashierName, setCashierName] = useState('Admin')
+  const [paymentMethod, setPaymentMethod] = useState('Cash')
+  const [amountPaid, setAmountPaid] = useState(0)
+  const [menuSearchQuery, setMenuSearchQuery] = useState('')
   const [showPaymentModal, setShowPaymentModal] = useState(false)
   const [orderToPay, setOrderToPay] = useState(null)
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState(null)
@@ -52,35 +64,62 @@ const Dashboard = () => {
   const [notifications, setNotifications] = useState([])
   const [previousOrderIds, setPreviousOrderIds] = useState(new Set())
   const [soundEnabled, setSoundEnabled] = useState(true)
-  const [audioContext, setAudioContext] = useState(null)
+  // Track which orders have already triggered sound notification (prevent looping)
+  const notifiedOrderIds = useRef(new Set())
+  // Store AudioContext reference for initialization
+  const audioContextRef = useRef(null)
 
   useEffect(() => {
     loadOrders()
     loadMenuItems()
     
-    // Initialize AudioContext on user interaction (required by browsers)
-    const initAudio = async () => {
-      try {
-        const ctx = new (window.AudioContext || window.webkitAudioContext)()
-        // Resume context if suspended (browser autoplay policy)
-        if (ctx.state === 'suspended') {
-          await ctx.resume()
+    // Initialize AudioContext on user interaction (required by browser autoplay policy)
+    const initAudioContext = () => {
+      if (!audioContextRef.current) {
+        try {
+          const ctx = new (window.AudioContext || window.webkitAudioContext)()
+          audioContextRef.current = ctx
+          // Resume if suspended
+          if (ctx.state === 'suspended') {
+            ctx.resume().then(() => {
+              console.log('AudioContext initialized and resumed')
+            }).catch(err => {
+              console.error('Error resuming AudioContext:', err)
+            })
+          }
+        } catch (error) {
+          console.error('Error creating AudioContext:', error)
         }
-        setAudioContext(ctx)
-      } catch (error) {
-        console.log('Audio initialization error:', error)
       }
     }
     
-    // Initialize audio on first user interaction
+    // Initialize on first user interaction
     const handleUserInteraction = () => {
-      initAudio()
+      initAudioContext()
+      // Remove listeners after first interaction
       document.removeEventListener('click', handleUserInteraction)
       document.removeEventListener('touchstart', handleUserInteraction)
     }
     
-    document.addEventListener('click', handleUserInteraction)
-    document.addEventListener('touchstart', handleUserInteraction)
+    document.addEventListener('click', handleUserInteraction, { once: true })
+    document.addEventListener('touchstart', handleUserInteraction, { once: true })
+    
+    // Load voices for speech synthesis (needed for some browsers)
+    const loadVoices = () => {
+      if ('speechSynthesis' in window) {
+        const voices = window.speechSynthesis.getVoices()
+        if (voices.length === 0) {
+          // Voices may not be loaded yet, try again
+          setTimeout(loadVoices, 100)
+        }
+      }
+    }
+    
+    // Load voices on page load
+    if ('speechSynthesis' in window) {
+      loadVoices()
+      window.speechSynthesis.onvoiceschanged = loadVoices
+    }
     
     // Listen for storage updates
     const handleStorageUpdate = () => {
@@ -105,6 +144,14 @@ const Dashboard = () => {
       window.removeEventListener('storage', handleStorageUpdate)
       window.removeEventListener('menuUpdate', handleMenuUpdate)
       clearInterval(interval)
+      // Cancel any ongoing speech when component unmounts
+      if ('speechSynthesis' in window) {
+        window.speechSynthesis.cancel()
+      }
+      // Close AudioContext
+      if (audioContextRef.current) {
+        audioContextRef.current.close().catch(() => {})
+      }
     }
   }, [])
 
@@ -183,71 +230,206 @@ const Dashboard = () => {
     setShowMenuModal(true)
   }
 
-  // Play notification sound - 3 second beep (LOUD)
-  const playNotificationSound = async () => {
+  // Play notification sound - Soft digital ding dong, 1s pause, then "New order received" voice (under 6s total)
+  const playNotificationSound = () => {
+    console.log('playNotificationSound called, soundEnabled:', soundEnabled)
     if (!soundEnabled) {
       console.log('Sound is disabled')
       return
     }
     
+    // Prevent multiple simultaneous sound plays
+    if (playNotificationSound.isPlaying) {
+      console.log('Sound already playing, skipping')
+      return
+    }
+    
+    playNotificationSound.isPlaying = true
+    console.log('Starting notification sound playback...')
+    
     try {
-      // Create or reuse audio context
-      let ctx = audioContext
-      if (!ctx) {
-        ctx = new (window.AudioContext || window.webkitAudioContext)()
-        setAudioContext(ctx)
+      // Play soft digital ding dong sound
+      const playDingDong = async () => {
+        try {
+          // Use existing AudioContext if available, otherwise create new one
+          let ctx = audioContextRef.current
+          if (!ctx || ctx.state === 'closed') {
+            console.log('Creating new AudioContext for notification sound')
+            ctx = new (window.AudioContext || window.webkitAudioContext)()
+            audioContextRef.current = ctx
+          }
+          
+          // Resume AudioContext if suspended (required by browser autoplay policy)
+          if (ctx.state === 'suspended') {
+            console.log('AudioContext is suspended, attempting to resume...')
+            try {
+              await ctx.resume()
+              console.log('AudioContext resumed for notification sound, state:', ctx.state)
+            } catch (error) {
+              console.error('Error resuming AudioContext:', error)
+              throw error
+            }
+          } else {
+            console.log('AudioContext state:', ctx.state)
+          }
+          
+          // Double-check context is running
+          if (ctx.state !== 'running') {
+            console.warn('AudioContext is not running, attempting to resume again...')
+            await ctx.resume()
+          }
+          
+          // "Ding" - higher, softer tone
+          const ding = () => {
+            const oscillator = ctx.createOscillator()
+            const gainNode = ctx.createGain()
+            
+            oscillator.connect(gainNode)
+            gainNode.connect(ctx.destination)
+            
+            // Soft, pleasant higher tone
+            oscillator.frequency.value = 880 // A5 - pleasant, modern tone
+            oscillator.type = 'sine' // Smooth sine wave for soft sound
+            
+            const now = ctx.currentTime
+            // Soft attack and decay for gentle sound
+            gainNode.gain.setValueAtTime(0, now)
+            gainNode.gain.linearRampToValueAtTime(0.4, now + 0.05) // Soft volume
+            gainNode.gain.exponentialRampToValueAtTime(0.01, now + 0.25) // Gentle fade
+            
+            oscillator.start(now)
+            oscillator.stop(now + 0.25)
+          }
+          
+          // "Dong" - lower, softer tone
+          const dong = () => {
+            const oscillator = ctx.createOscillator()
+            const gainNode = ctx.createGain()
+            
+            oscillator.connect(gainNode)
+            gainNode.connect(ctx.destination)
+            
+            // Soft, pleasant lower tone
+            oscillator.frequency.value = 660 // E5 - harmonious lower tone
+            oscillator.type = 'sine' // Smooth sine wave for soft sound
+            
+            const now = ctx.currentTime + 0.3 // 300ms after ding starts
+            // Soft attack and decay for gentle sound
+            gainNode.gain.setValueAtTime(0, now)
+            gainNode.gain.linearRampToValueAtTime(0.4, now + 0.05) // Soft volume
+            gainNode.gain.exponentialRampToValueAtTime(0.01, now + 0.3) // Gentle fade
+            
+            oscillator.start(now)
+            oscillator.stop(now + 0.3)
+          }
+          
+          // Ensure context is running before playing sounds
+          if (ctx.state === 'suspended') {
+            await ctx.resume()
+          }
+          
+          ding()
+          dong()
+          
+          console.log('Ding dong sound started')
+          return ctx
+        } catch (error) {
+          console.error('Could not play ding dong sound:', error)
+          return null
+        }
       }
       
-      // Resume context if suspended (required by browser autoplay policy)
-      if (ctx.state === 'suspended') {
-        await ctx.resume()
-      }
-      
-      const oscillator = ctx.createOscillator()
-      const gainNode = ctx.createGain()
-      
-      oscillator.connect(gainNode)
-      gainNode.connect(ctx.destination)
-      
-      // Set frequency for beep (800 Hz)
-      oscillator.frequency.value = 800
-      oscillator.type = 'sine'
-      
-      // Set volume - MUCH LOUDER (0.9 = 90% volume)
-      gainNode.gain.setValueAtTime(0.9, ctx.currentTime)
-      gainNode.gain.setValueAtTime(0.9, ctx.currentTime + 2.8)
-      gainNode.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 3)
-      
-      // Play for 3 seconds
-      oscillator.start(ctx.currentTime)
-      oscillator.stop(ctx.currentTime + 3)
-      
-      console.log('Notification sound played')
+      // Play soft digital ding dong (async to handle AudioContext resume)
+      playDingDong().then(audioCtx => {
+        console.log('Ding dong sound completed, audioCtx:', audioCtx)
+        
+        // Play voice announcement after 1 second pause
+        if ('speechSynthesis' in window) {
+          // Cancel any ongoing speech
+          window.speechSynthesis.cancel()
+          
+          // Wait 1 second after ding dong, then announce
+          setTimeout(() => {
+            try {
+              const utterance = new SpeechSynthesisUtterance('New order received')
+              
+              // Set voice properties for clear, professional voice
+              utterance.volume = 1.0 // Maximum volume
+              utterance.rate = 0.95 // Slightly slower for clarity and professionalism
+              utterance.pitch = 1.0 // Normal pitch for professional tone
+              
+              // Try to use modern, professional voices
+              const voices = window.speechSynthesis.getVoices()
+              
+              // Priority: Modern professional voices (Google, Microsoft, Apple)
+              const preferredVoice = voices.find(voice => 
+                // Google modern voices (professional)
+                voice.name.toLowerCase().includes('google') ||
+                voice.name.toLowerCase().includes('neural') ||
+                // Microsoft modern professional voices
+                voice.name.toLowerCase().includes('aria') ||
+                voice.name.toLowerCase().includes('jenny') ||
+                voice.name.toLowerCase().includes('guy') ||
+                // Apple modern professional voices
+                voice.name.toLowerCase().includes('samantha') ||
+                voice.name.toLowerCase().includes('alex') ||
+                // Professional female voices
+                (voice.name.toLowerCase().includes('female') && 
+                 !voice.name.toLowerCase().includes('old') &&
+                 !voice.name.toLowerCase().includes('compact'))
+              ) || voices.find(voice => 
+                voice.lang.startsWith('en') && voice.localService === false // Cloud-based voices are usually modern
+              ) || voices.find(voice => 
+                voice.name.toLowerCase().includes('zira') ||
+                voice.name.toLowerCase().includes('samantha')
+              )
+              
+              if (preferredVoice) {
+                utterance.voice = preferredVoice
+                console.log('Using professional voice:', preferredVoice.name)
+              }
+              
+              // Speak the notification
+              window.speechSynthesis.speak(utterance)
+              console.log('Voice announcement started')
+              
+              // Reset playing flag after speech completes
+              utterance.onend = () => {
+                playNotificationSound.isPlaying = false
+                console.log('New order received notification completed')
+              }
+              
+              utterance.onerror = (error) => {
+                playNotificationSound.isPlaying = false
+                console.error('New order received notification error:', error)
+              }
+            } catch (error) {
+              console.error('Error creating speech utterance:', error)
+              playNotificationSound.isPlaying = false
+            }
+          }, 1000) // 1 second pause after ding dong
+        } else {
+          // If no speech synthesis, reset flag after ding dong
+          setTimeout(() => {
+            playNotificationSound.isPlaying = false
+          }, 700) // Reset after ding dong completes (~600ms)
+        }
+        
+        // Don't close AudioContext - keep it open for future sounds
+        // Only close if it's a new context we created (not the shared one)
+        // The shared audioContextRef will be cleaned up on component unmount
+      }).catch(error => {
+        console.error('Error playing ding dong:', error)
+        playNotificationSound.isPlaying = false
+      })
     } catch (error) {
       console.error('Could not play notification sound:', error)
-      // Fallback: try creating new context
-      try {
-        const ctx = new (window.AudioContext || window.webkitAudioContext)()
-        if (ctx.state === 'suspended') {
-          await ctx.resume()
-        }
-        const oscillator = ctx.createOscillator()
-        const gainNode = ctx.createGain()
-        
-        oscillator.connect(gainNode)
-        gainNode.connect(ctx.destination)
-        
-        oscillator.frequency.value = 800
-        oscillator.type = 'sine'
-        gainNode.gain.value = 0.9 // Loud volume
-        
-        oscillator.start()
-        oscillator.stop(ctx.currentTime + 3)
-      } catch (fallbackError) {
-        console.error('Fallback sound also failed:', fallbackError)
-      }
+      playNotificationSound.isPlaying = false
     }
   }
+  
+  // Initialize playing flag
+  playNotificationSound.isPlaying = false
 
   // Show notification popup
   const showNotification = (order) => {
@@ -272,28 +454,57 @@ const Dashboard = () => {
       new Date(b.timestamp) - new Date(a.timestamp)
     )
     
-    // Detect new orders
+    const currentOrderIds = new Set(sortedOrders.map(o => o.id))
+    
+    // Detect new orders (works even on first load by checking if previousOrderIds is empty)
     if (previousOrderIds.size > 0) {
-      const currentOrderIds = new Set(sortedOrders.map(o => o.id))
+      // Filter new orders that haven't been notified yet
       const newOrders = sortedOrders.filter(order => 
-        !previousOrderIds.has(order.id) && order.status === 'Pending'
+        !previousOrderIds.has(order.id) && 
+        order.status === 'Pending' &&
+        !notifiedOrderIds.current.has(order.id) // Only orders that haven't triggered notification
       )
       
-      // Show notification and play sound for each new order
+      // Show notification and play sound for new orders (only once per order, not looping)
       if (newOrders.length > 0) {
         console.log('New orders detected:', newOrders.length)
-        newOrders.forEach((order, index) => {
-          // Show notification immediately
+        
+        // Mark these orders as notified to prevent looping
+        newOrders.forEach((order) => {
+          notifiedOrderIds.current.add(order.id)
           showNotification(order)
-          // Play sound with slight delay to avoid overlap
-          setTimeout(() => {
-            playNotificationSound()
-          }, index * 500) // 500ms delay between sounds if multiple orders
         })
+        
+        // Play sound only once (not looping) - regardless of how many new orders
+        // Only if sound is not already playing
+        if (!playNotificationSound.isPlaying) {
+          console.log('Triggering notification sound for new orders')
+          // Ensure AudioContext is initialized before playing
+          if (!audioContextRef.current || audioContextRef.current.state === 'closed') {
+            try {
+              const ctx = new (window.AudioContext || window.webkitAudioContext)()
+              audioContextRef.current = ctx
+              console.log('Created new AudioContext for notification')
+            } catch (error) {
+              console.error('Error creating AudioContext:', error)
+            }
+          }
+          playNotificationSound()
+        } else {
+          console.log('Sound already playing, skipping')
+        }
       }
+    } else {
+      // First load: Initialize previousOrderIds with current orders
+      // Also mark all existing pending orders as notified to prevent false notifications
+      sortedOrders.forEach(order => {
+        if (order.status === 'Pending') {
+          notifiedOrderIds.current.add(order.id)
+        }
+      })
     }
     
-    setPreviousOrderIds(new Set(sortedOrders.map(o => o.id)))
+    setPreviousOrderIds(currentOrderIds)
     setOrders(sortedOrders)
   }
 
@@ -303,7 +514,10 @@ const Dashboard = () => {
     )
     storage.set('orders', updatedOrders, true)
     setOrders(updatedOrders)
-    setSelectedOrder(null)
+    // Only clear selected order if it's the one being updated
+    if (selectedOrder && selectedOrder.id === orderId) {
+      setSelectedOrder(null)
+    }
   }
 
   const deleteOrder = (orderId) => {
@@ -340,6 +554,8 @@ const Dashboard = () => {
     setOrderToPay(order)
     setShowPaymentModal(true)
     setSelectedPaymentMethod(null)
+    // Close the order detail modal when opening payment modal
+    setSelectedOrder(null)
   }
 
   const getStatusIcon = (status) => {
@@ -462,13 +678,24 @@ const Dashboard = () => {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-coffee-50 to-coffee-100">
+    <div className="min-h-screen bg-gradient-to-br from-green-50 via-emerald-50 via-white to-green-50 relative overflow-hidden">
+      {/* Background Pattern Overlay */}
+      <div className="absolute inset-0 opacity-5 pointer-events-none">
+        <div className="absolute inset-0" style={{
+          backgroundImage: `url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%2310b981' fill-opacity='1'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E")`,
+          backgroundSize: '60px 60px'
+        }}></div>
+      </div>
+      <div className="relative z-10">
       {/* Header */}
-      <div className="bg-coffee-800 text-white p-6 shadow-lg">
+      <div className="bg-gradient-to-r from-green-800 to-green-900 text-white p-6 shadow-xl animate-fade-in">
         <div className="max-w-7xl mx-auto flex items-center justify-between">
-          <div>
-            <h1 className="text-3xl font-bold">Lakopi Restaurant Dashboard</h1>
-            <p className="text-coffee-200 mt-1">Order Management System</p>
+          <div className="flex items-center gap-4">
+            <Logo className="w-40 h-12" />
+            <div className="border-l border-green-300 pl-4">
+              <h1 className="text-2xl font-bold">Dashboard</h1>
+              <p className="text-green-200 text-sm mt-1">Order Management System</p>
+            </div>
           </div>
           <div className="flex items-center gap-3">
             <button
@@ -476,24 +703,32 @@ const Dashboard = () => {
                 const newState = !soundEnabled
                 setSoundEnabled(newState)
                 
-                // Always play test sound when clicking (to test or enable)
-                if (newState) {
-                  // Initialize audio context on first enable
-                  if (!audioContext) {
-                    try {
-                      const ctx = new (window.AudioContext || window.webkitAudioContext)()
-                      if (ctx.state === 'suspended') {
-                        await ctx.resume()
-                      }
-                      setAudioContext(ctx)
-                      console.log('Audio context initialized')
-                    } catch (error) {
-                      console.error('Failed to initialize audio:', error)
+                // Initialize AudioContext if not already done (required for browser autoplay policy)
+                if (!audioContextRef.current || audioContextRef.current.state === 'closed') {
+                  try {
+                    const ctx = new (window.AudioContext || window.webkitAudioContext)()
+                    audioContextRef.current = ctx
+                    if (ctx.state === 'suspended') {
+                      await ctx.resume()
+                      console.log('AudioContext initialized and resumed for test')
                     }
+                  } catch (error) {
+                    console.error('Error initializing AudioContext:', error)
                   }
-                  // Play test sound immediately
-                  console.log('Playing test sound...')
-                  await playNotificationSound()
+                } else if (audioContextRef.current.state === 'suspended') {
+                  try {
+                    await audioContextRef.current.resume()
+                    console.log('AudioContext resumed for test')
+                  } catch (error) {
+                    console.error('Error resuming AudioContext:', error)
+                  }
+                }
+                
+                // Always play test notification when clicking (to test or enable)
+                if (newState) {
+                  // Play test notification immediately
+                  console.log('Playing test notification...')
+                  playNotificationSound()
                 } else {
                   console.log('Notifications disabled')
                 }
@@ -509,7 +744,7 @@ const Dashboard = () => {
             </button>
             <button
               onClick={() => navigate('/table/1')}
-              className="bg-coffee-600 hover:bg-coffee-700 px-4 py-2 rounded-lg font-semibold transition-colors flex items-center gap-2"
+              className="bg-green-700 hover:bg-green-600 px-4 py-2 rounded-lg font-semibold transition-bounce flex items-center gap-2 hover-lift shadow-md"
             >
               <ArrowLeft className="w-4 h-4" />
               Customer View
@@ -519,7 +754,7 @@ const Dashboard = () => {
                 auth.logout()
                 navigate('/login')
               }}
-              className="bg-red-600 hover:bg-red-700 px-4 py-2 rounded-lg font-semibold transition-colors flex items-center gap-2"
+              className="bg-red-600 hover:bg-red-700 px-4 py-2 rounded-lg font-semibold transition-bounce flex items-center gap-2 hover-lift shadow-md"
             >
               <LogOut className="w-4 h-4" />
               Logout
@@ -677,49 +912,77 @@ const Dashboard = () => {
               <p className="text-coffee-600 text-sm mt-1">Click on a table to view and manage orders</p>
             </div>
             <div className="p-6">
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                {[1, 2, 3, 4].map(tableNum => {
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+                {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(tableNum => {
                   const tableData = getTableData(tableNum)
                   return (
-                    <button
-                      key={tableNum}
-                      onClick={() => setSelectedTable(tableNum)}
-                      className={`relative p-6 rounded-xl border-2 transition-all hover:scale-105 hover:shadow-lg ${getTableStatusColor(tableData.status)}`}
-                    >
-                      <div className="text-center">
-                        <div className="flex justify-center mb-3">
-                          {getTableStatusIcon(tableData.status)}
+                    <div key={tableNum} className="flex flex-col">
+                      <button
+                        onClick={() => {
+                          setSelectedTable(tableNum)
+                          setShowTableManagement(true)
+                          setTableCart([])
+                        }}
+                        className={`relative p-4 sm:p-6 rounded-xl border-2 transition-all hover:scale-105 hover:shadow-lg ${getTableStatusColor(tableData.status)} animate-fade-in-up flex-1`}
+                      >
+                        <div className="text-center">
+                          <div className="flex justify-center mb-3">
+                            {getTableStatusIcon(tableData.status)}
+                          </div>
+                          <h3 className="text-2xl font-bold mb-2">Table {tableNum}</h3>
+                          {tableData.status === 'empty' ? (
+                            <p className="text-sm opacity-75">Available</p>
+                          ) : (
+                            <>
+                              <p className="text-sm font-semibold mb-1">
+                                {tableData.orderCount} Active Order{tableData.orderCount !== 1 ? 's' : ''}
+                              </p>
+                              {tableData.pendingOrders.length > 0 && (
+                                <p className="text-xs bg-red-200 text-red-800 px-2 py-1 rounded-full inline-block mb-1">
+                                  {tableData.pendingOrders.length} Pending
+                                </p>
+                              )}
+                              {tableData.preparingOrders.length > 0 && (
+                                <p className="text-xs bg-yellow-200 text-yellow-800 px-2 py-1 rounded-full inline-block mb-1">
+                                  {tableData.preparingOrders.length} Preparing
+                                </p>
+                              )}
+                              <p className="text-lg font-bold mt-2">
+                                RM {tableData.totalAmount.toFixed(2)}
+                              </p>
+                            </>
+                          )}
                         </div>
-                        <h3 className="text-2xl font-bold mb-2">Table {tableNum}</h3>
-                        {tableData.status === 'empty' ? (
-                          <p className="text-sm opacity-75">Available</p>
-                        ) : (
-                          <>
-                            <p className="text-sm font-semibold mb-1">
-                              {tableData.orderCount} Active Order{tableData.orderCount !== 1 ? 's' : ''}
-                            </p>
-                            {tableData.pendingOrders.length > 0 && (
-                              <p className="text-xs bg-red-200 text-red-800 px-2 py-1 rounded-full inline-block mb-1">
-                                {tableData.pendingOrders.length} Pending
-                              </p>
-                            )}
-                            {tableData.preparingOrders.length > 0 && (
-                              <p className="text-xs bg-yellow-200 text-yellow-800 px-2 py-1 rounded-full inline-block mb-1">
-                                {tableData.preparingOrders.length} Preparing
-                              </p>
-                            )}
-                            <p className="text-lg font-bold mt-2">
-                              RM {tableData.totalAmount.toFixed(2)}
-                            </p>
-                          </>
+                        {tableData.pendingOrders.length > 0 && (
+                          <div className="absolute top-2 right-2 bg-red-500 text-white text-xs font-bold rounded-full w-6 h-6 flex items-center justify-center">
+                            {tableData.pendingOrders.length}
+                          </div>
                         )}
-                      </div>
+                      </button>
+                      {/* Send to Kitchen Button */}
                       {tableData.pendingOrders.length > 0 && (
-                        <div className="absolute top-2 right-2 bg-red-500 text-white text-xs font-bold rounded-full w-6 h-6 flex items-center justify-center">
-                          {tableData.pendingOrders.length}
-                        </div>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            // Mark all pending orders as Preparing in a single update
+                            const pendingOrderIds = tableData.pendingOrders.map(order => order.id)
+                            const updatedOrders = orders.map(order =>
+                              pendingOrderIds.includes(order.id) 
+                                ? { ...order, status: 'Preparing' } 
+                                : order
+                            )
+                            storage.set('orders', updatedOrders, true)
+                            setOrders(updatedOrders)
+                            // Reload to ensure synchronization
+                            loadOrders()
+                          }}
+                          className="mt-2 w-full bg-gradient-to-r from-yellow-500 to-yellow-600 hover:from-yellow-600 hover:to-yellow-700 text-white py-2 px-3 rounded-lg text-xs font-semibold transition-all flex items-center justify-center gap-2 shadow-md hover:shadow-lg hover-lift"
+                        >
+                          <ChefHat className="w-3 h-3" />
+                          Send {tableData.pendingOrders.length} to Kitchen
+                        </button>
                       )}
-                    </button>
+                    </div>
                   )
                 })}
               </div>
@@ -727,132 +990,552 @@ const Dashboard = () => {
           </div>
         )}
 
-        {/* Table Orders Modal */}
-        {selectedTable && viewMode === 'tables' && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
-            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
-              <div className="p-6 border-b border-coffee-200 bg-coffee-50">
-                <div className="flex items-center justify-between">
+        {/* Advanced POS Table Management Modal */}
+        {showTableManagement && selectedTable && viewMode === 'tables' && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-2 sm:p-4 animate-fade-in">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-7xl max-h-[95vh] overflow-hidden flex flex-col animate-scale-in">
+              {/* Header */}
+              <div className="p-4 sm:p-6 border-b border-green-200 bg-gradient-to-r from-green-50 to-white">
+                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
                   <div>
-                    <h2 className="text-2xl font-bold text-coffee-800">
-                      Table {selectedTable} - Orders
+                    <h2 className="text-2xl sm:text-3xl font-bold text-green-800">
+                      Table {selectedTable} - POS Management
                     </h2>
-                    <p className="text-coffee-600 mt-1">
-                      {getTableData(selectedTable).activeOrders.length} active order{getTableData(selectedTable).activeOrders.length !== 1 ? 's' : ''}
+                    <p className="text-green-600 text-sm mt-1">
+                      {getTableData(selectedTable).activeOrders.length} active order{getTableData(selectedTable).activeOrders.length !== 1 ? 's' : ''} • Total: RM {getTableData(selectedTable).totalAmount.toFixed(2)}
                     </p>
                   </div>
-                  <button
-                    onClick={() => setSelectedTable(null)}
-                    className="text-coffee-600 hover:text-coffee-800"
-                  >
-                    <X className="w-6 h-6" />
-                  </button>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => setShowBill(true)}
+                      className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg font-semibold transition-all flex items-center gap-2 hover-lift shadow-md"
+                    >
+                      <ReceiptIcon className="w-4 h-4" />
+                      <span className="hidden sm:inline">View Bill</span>
+                    </button>
+                    <button
+                      onClick={() => {
+                        setShowTableManagement(false)
+                        setSelectedTable(null)
+                        setTableCart([])
+                      }}
+                      className="bg-gray-200 hover:bg-gray-300 text-gray-800 px-4 py-2 rounded-lg font-semibold transition-all hover-lift"
+                    >
+                      <X className="w-5 h-5" />
+                    </button>
+                  </div>
                 </div>
               </div>
 
-              <div className="flex-1 overflow-y-auto p-6">
-                {getTableData(selectedTable).activeOrders.length === 0 ? (
-                  <div className="text-center py-12">
-                    <Users className="w-16 h-16 text-coffee-300 mx-auto mb-4" />
-                    <p className="text-coffee-600 text-lg">No active orders for this table</p>
+              {/* POS Split View */}
+              <div className="flex-1 overflow-hidden flex flex-col lg:flex-row gap-4 p-4 sm:p-6">
+                {/* Left: Menu Items */}
+                <div className="w-full lg:w-1/2 border-r-0 lg:border-r border-green-200 pr-0 lg:pr-4 overflow-y-auto">
+                  <div className="sticky top-0 bg-white pb-4 z-10">
+                    <h3 className="text-lg font-bold text-green-800 mb-3">Add Items to Table</h3>
+                    {/* Search Bar */}
+                    <div className="relative mb-3">
+                      <input
+                        type="text"
+                        value={menuSearchQuery}
+                        onChange={(e) => setMenuSearchQuery(e.target.value)}
+                        placeholder="Search menu items..."
+                        className="w-full px-4 py-2 pl-10 border-2 border-green-200 rounded-lg focus:border-green-500 focus:outline-none text-green-800"
+                      />
+                      <ShoppingBag className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-green-400" />
+                    </div>
                   </div>
-                ) : (
-                  <div className="space-y-4">
-                    {getTableData(selectedTable).activeOrders.map(order => (
-                      <div
-                        key={order.id}
-                        className="border-2 border-coffee-200 rounded-xl p-4 hover:border-coffee-400 transition-colors cursor-pointer"
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                    {menuItems
+                      .filter(item => 
+                        menuSearchQuery === '' || 
+                        item.name.toLowerCase().includes(menuSearchQuery.toLowerCase()) ||
+                        item.category.toLowerCase().includes(menuSearchQuery.toLowerCase())
+                      )
+                      .map(item => (
+                      <button
+                        key={item.id}
                         onClick={() => {
-                          setSelectedTable(null)
-                          setSelectedOrder(order)
-                          setViewMode('orders')
+                          const existing = tableCart.find(i => i.id === item.id)
+                          if (existing) {
+                            setTableCart(tableCart.map(i => 
+                              i.id === item.id ? { ...i, quantity: i.quantity + 1 } : i
+                            ))
+                          } else {
+                            setTableCart([...tableCart, { ...item, quantity: 1 }])
+                          }
                         }}
+                        className="bg-green-50 hover:bg-green-100 border-2 border-green-200 rounded-lg p-3 text-left transition-all hover-lift"
                       >
-                        <div className="flex items-center justify-between mb-3">
-                          <div className="flex items-center gap-3">
-                            {getStatusIcon(order.status)}
-                            <span className={`px-3 py-1 rounded-full text-xs font-semibold border ${getStatusColor(order.status)}`}>
-                              {order.status}
-                            </span>
-                            <span className="text-sm text-coffee-500">
-                              {formatTime(order.timestamp)}
-                            </span>
-                          </div>
-                          <span className="text-xl font-bold text-coffee-700">
-                            RM {order.total.toFixed(2)}
-                          </span>
-                        </div>
-                        <div className="space-y-1">
-                          {order.items.map((item, index) => (
-                            <div key={index} className="flex justify-between text-sm text-coffee-700">
-                              <span>{item.quantity}x {item.name}</span>
-                              <span>RM {(item.price * item.quantity).toFixed(2)}</span>
-                            </div>
-                          ))}
-                        </div>
-                        <div className="mt-3 flex gap-2 flex-wrap">
-                          {order.status === 'Pending' && (
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                updateOrderStatus(order.id, 'Preparing')
-                              }}
-                              className="flex-1 min-w-[100px] bg-yellow-500 text-white py-2 px-3 rounded-lg text-sm font-semibold hover:bg-yellow-600 transition-colors flex items-center justify-center gap-2"
-                            >
-                              <ChefHat className="w-4 h-4" />
-                              Preparing
-                            </button>
-                          )}
-                          {order.status !== 'Completed' && (
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                updateOrderStatus(order.id, 'Completed')
-                              }}
-                              className="flex-1 min-w-[100px] bg-green-500 text-white py-2 px-3 rounded-lg text-sm font-semibold hover:bg-green-600 transition-colors flex items-center justify-center gap-2"
-                            >
-                              <CheckCircle className="w-4 h-4" />
-                              Complete
-                            </button>
-                          )}
-                          {order.status === 'Completed' && order.paymentStatus !== 'Paid' && (
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                openPaymentModal(order)
-                              }}
-                              className="flex-1 min-w-[100px] bg-blue-500 text-white py-2 px-3 rounded-lg text-sm font-semibold hover:bg-blue-600 transition-colors flex items-center justify-center gap-2"
-                            >
-                              <Receipt className="w-4 h-4" />
-                              Pay
-                            </button>
-                          )}
-                          {order.paymentStatus === 'Paid' && (
-                            <span className="px-3 py-2 bg-green-100 text-green-800 text-xs font-semibold rounded-lg flex items-center gap-1">
-                              <CheckCircle className="w-4 h-4" />
-                              Paid ({order.paymentMethod})
-                            </span>
-                          )}
-                          {order.status !== 'Completed' && (
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                deleteOrder(order.id)
-                              }}
-                              className="bg-red-500 text-white py-2 px-3 rounded-lg text-sm font-semibold hover:bg-red-600 transition-colors flex items-center justify-center gap-2"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
-                          )}
-                        </div>
-                      </div>
+                        <div className="text-xs font-semibold text-green-800 mb-1 line-clamp-1">{item.name}</div>
+                        <div className="text-sm font-bold text-green-700">RM {item.price.toFixed(2)}</div>
+                      </button>
                     ))}
                   </div>
-                )}
+                </div>
+
+                {/* Right: Table Items & Cart */}
+                <div className="w-full lg:w-1/2 flex flex-col">
+                  {/* Current Table Items */}
+                  <div className="flex-1 overflow-y-auto mb-4">
+                    <h3 className="text-lg font-bold text-green-800 mb-3">Table Items</h3>
+                    {getTableData(selectedTable).activeOrders.length === 0 && tableCart.length === 0 ? (
+                      <div className="text-center py-8 text-green-500">
+                        <Users className="w-12 h-12 mx-auto mb-2 opacity-50" />
+                        <p>No items. Add items from menu.</p>
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        {/* Items from existing orders */}
+                        {getTableData(selectedTable).activeOrders.flatMap(order => 
+                          order.items.map((item, idx) => (
+                            <div key={`${order.id}-${idx}`} className="bg-green-50 border border-green-200 rounded-lg p-3 flex items-center justify-between">
+                              <div className="flex-1">
+                                <div className="font-semibold text-green-800 text-sm">{item.quantity}x {item.name}</div>
+                                <div className="text-xs text-green-600">RM {(item.price * item.quantity).toFixed(2)}</div>
+                              </div>
+                              <div className="flex gap-1">
+                                <button
+                                  onClick={() => {
+                                    const orderToUpdate = orders.find(o => o.id === order.id)
+                                    if (orderToUpdate) {
+                                      const updatedItems = orderToUpdate.items.filter((_, i) => i !== idx)
+                                      if (updatedItems.length === 0) {
+                                        deleteOrder(order.id)
+                                      } else {
+                                        const newTotal = updatedItems.reduce((sum, i) => sum + (i.price * i.quantity), 0)
+                                        const updatedOrders = orders.map(o => 
+                                          o.id === order.id 
+                                            ? { ...o, items: updatedItems, total: newTotal }
+                                            : o
+                                        )
+                                        storage.set('orders', updatedOrders, true)
+                                        setOrders(updatedOrders)
+                                      }
+                                    }
+                                  }}
+                                  className="bg-red-500 text-white p-1.5 rounded hover:bg-red-600 transition-colors"
+                                  title="Remove"
+                                >
+                                  <Trash2 className="w-3 h-3" />
+                                </button>
+                                <button
+                                  onClick={() => setMoveItemModal({ orderId: order.id, itemIndex: idx, item })}
+                                  className="bg-blue-500 text-white p-1.5 rounded hover:bg-blue-600 transition-colors"
+                                  title="Move to another table"
+                                >
+                                  <Move className="w-3 h-3" />
+                                </button>
+                              </div>
+                            </div>
+                          ))
+                        )}
+                        {/* Items in cart (to be added) */}
+                        {tableCart.map((item, idx) => (
+                          <div key={`cart-${idx}`} className="bg-blue-50 border border-blue-200 rounded-lg p-3 flex items-center justify-between">
+                            <div className="flex-1">
+                              <div className="font-semibold text-blue-800 text-sm">{item.quantity}x {item.name}</div>
+                              <div className="text-xs text-blue-600">RM {(item.price * item.quantity).toFixed(2)}</div>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <button
+                                onClick={() => {
+                                  if (item.quantity > 1) {
+                                    setTableCart(tableCart.map((cartItem, index) => index === idx ? { ...cartItem, quantity: cartItem.quantity - 1 } : cartItem))
+                                  } else {
+                                    setTableCart(tableCart.filter((_, index) => index !== idx))
+                                  }
+                                }}
+                                className="bg-blue-200 text-blue-800 w-6 h-6 rounded flex items-center justify-center font-bold"
+                              >
+                                -
+                              </button>
+                              <span className="text-sm font-bold">{item.quantity}</span>
+                              <button
+                                onClick={() => setTableCart(tableCart.map((cartItem, index) => index === idx ? { ...cartItem, quantity: cartItem.quantity + 1 } : cartItem))}
+                                className="bg-blue-200 text-blue-800 w-6 h-6 rounded flex items-center justify-center font-bold"
+                              >
+                                +
+                              </button>
+                              <button
+                                onClick={() => setTableCart(tableCart.filter((_, i) => i !== idx))}
+                                className="bg-red-500 text-white p-1.5 rounded hover:bg-red-600 transition-colors ml-2"
+                              >
+                                <Trash2 className="w-3 h-3" />
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Action Buttons */}
+                  <div className="border-t border-green-200 pt-4 space-y-2">
+                    <div className="flex justify-between items-center mb-2">
+                      <span className="font-bold text-green-800">Total:</span>
+                      <span className="text-2xl font-bold text-green-700">
+                        RM {(getTableData(selectedTable).totalAmount + tableCart.reduce((sum, item) => sum + (item.price * item.quantity), 0)).toFixed(2)}
+                      </span>
+                    </div>
+                    {getTableData(selectedTable).activeOrders.length > 0 && (
+                      <button
+                        onClick={() => {
+                          // Move all items from this table to another table
+                          const allItems = getTableData(selectedTable).activeOrders.flatMap(order => order.items)
+                          if (allItems.length > 0) {
+                            setMoveItemModal({ 
+                              type: 'all',
+                              items: allItems,
+                              fromTable: selectedTable
+                            })
+                          }
+                        }}
+                        className="w-full bg-gradient-to-r from-blue-600 to-blue-700 text-white py-2 rounded-lg font-semibold hover:from-blue-700 hover:to-blue-800 transition-all shadow-md hover:shadow-lg flex items-center justify-center gap-2 mb-2"
+                      >
+                        <Move className="w-4 h-4" />
+                        Move All Items to Another Table
+                      </button>
+                    )}
+                    {tableCart.length > 0 && (
+                      <button
+                        onClick={() => {
+                          const newOrder = {
+                            id: Date.now().toString(),
+                            tableNumber: selectedTable,
+                            items: tableCart.map(item => ({
+                              id: item.id,
+                              name: item.name,
+                              price: item.price,
+                              quantity: item.quantity,
+                            })),
+                            total: tableCart.reduce((sum, item) => sum + (item.price * item.quantity), 0),
+                            status: 'Pending',
+                            timestamp: new Date().toISOString(),
+                          }
+                          const existingOrders = storage.get('orders', true) || []
+                          storage.set('orders', [...existingOrders, newOrder], true)
+                          loadOrders()
+                          setTableCart([])
+                        }}
+                        className="w-full bg-gradient-to-r from-green-600 to-green-700 text-white py-3 rounded-lg font-semibold hover:from-green-700 hover:to-green-800 transition-all shadow-lg hover:shadow-xl"
+                      >
+                        Add {tableCart.reduce((sum, item) => sum + item.quantity, 0)} Item(s) to Table
+                      </button>
+                    )}
+                  </div>
+                </div>
               </div>
             </div>
           </div>
         )}
+
+        {/* Move Item Modal */}
+        {moveItemModal && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4 animate-fade-in">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 animate-scale-in">
+              <h3 className="text-xl font-bold text-green-800 mb-4">
+                {moveItemModal.type === 'all' ? 'Move All Items to Another Table' : 'Move Item to Another Table'}
+              </h3>
+              {moveItemModal.type === 'all' ? (
+                <div className="mb-4">
+                  <p className="text-green-600 mb-2">Moving all items from Table {moveItemModal.fromTable}:</p>
+                  <div className="bg-green-50 rounded-lg p-3 max-h-32 overflow-y-auto">
+                    {moveItemModal.items.map((item, idx) => (
+                      <div key={idx} className="text-sm text-green-800">
+                        {item.quantity}x {item.name}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <p className="text-green-600 mb-4">{moveItemModal.item.quantity}x {moveItemModal.item.name}</p>
+              )}
+              <div className="grid grid-cols-2 gap-2 mb-4 max-h-60 overflow-y-auto">
+                {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].filter(t => t !== (moveItemModal.fromTable || selectedTable)).map(tableNum => (
+                  <button
+                    key={tableNum}
+                    onClick={() => {
+                      if (moveItemModal.type === 'all') {
+                        // Move all items from current table to target table
+                        const tableData = getTableData(moveItemModal.fromTable)
+                        const allOrders = tableData.activeOrders
+                        
+                        // Create new order for target table with all items
+                        const newOrder = {
+                          id: Date.now().toString(),
+                          tableNumber: tableNum,
+                          items: moveItemModal.items,
+                          total: moveItemModal.items.reduce((sum, item) => sum + (item.price * item.quantity), 0),
+                          status: allOrders[0]?.status || 'Pending',
+                          timestamp: new Date().toISOString(),
+                        }
+                        
+                        // Remove all orders from source table
+                        const updatedOrders = orders.filter(o => 
+                          !allOrders.some(order => order.id === o.id)
+                        )
+                        
+                        storage.set('orders', [...updatedOrders, newOrder], true)
+                        loadOrders()
+                        setMoveItemModal(null)
+                        setShowTableManagement(false)
+                        setSelectedTable(null)
+                      } else {
+                        // Remove from current order
+                        const orderToUpdate = orders.find(o => o.id === moveItemModal.orderId)
+                        if (orderToUpdate) {
+                          const updatedItems = orderToUpdate.items.filter((_, i) => i !== moveItemModal.itemIndex)
+                          const newTotal = updatedItems.reduce((sum, i) => sum + (i.price * i.quantity), 0)
+                          
+                          // Create new order for target table
+                          const newOrder = {
+                            id: Date.now().toString(),
+                            tableNumber: tableNum,
+                            items: [moveItemModal.item],
+                            total: moveItemModal.item.price * moveItemModal.item.quantity,
+                            status: orderToUpdate.status,
+                            timestamp: new Date().toISOString(),
+                          }
+                          
+                          const updatedOrders = orders
+                            .map(o => o.id === moveItemModal.orderId 
+                              ? (updatedItems.length === 0 ? null : { ...o, items: updatedItems, total: newTotal })
+                              : o
+                            )
+                            .filter(Boolean)
+                          
+                          storage.set('orders', [...updatedOrders, newOrder], true)
+                          loadOrders()
+                          setMoveItemModal(null)
+                        }
+                      }
+                    }}
+                    className="bg-green-100 hover:bg-green-200 text-green-800 p-3 rounded-lg font-semibold transition-colors hover-lift"
+                  >
+                    Table {tableNum}
+                  </button>
+                ))}
+              </div>
+              <button
+                onClick={() => setMoveItemModal(null)}
+                className="w-full bg-gray-200 text-gray-800 py-2 rounded-lg font-semibold hover:bg-gray-300"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Bill View Modal */}
+        {showBill && selectedTable && (() => {
+          const tableData = getTableData(selectedTable)
+          const subtotal = tableData.totalAmount
+          const serviceCharge = subtotal * 0.10
+          const sst = (subtotal + serviceCharge) * 0.06
+          const grandTotal = subtotal + serviceCharge + sst
+          const change = amountPaid - grandTotal
+          const receiptNo = `R${Date.now().toString().slice(-6)}`
+          const now = new Date()
+          const dateStr = now.toLocaleDateString('en-MY', { day: '2-digit', month: '2-digit', year: 'numeric' })
+          const timeStr = now.toLocaleTimeString('en-MY', { hour: '2-digit', minute: '2-digit', hour12: false })
+          const allItems = tableData.activeOrders.flatMap(order => order.items)
+          
+          return (
+            <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4 animate-fade-in">
+              <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md animate-scale-in print:shadow-none print:rounded-none">
+                {/* Bill Content */}
+                <div className="p-6 print:p-4">
+                  <div className="text-center font-mono text-xs print:text-[10px]">
+                    {/* Header */}
+                    <div className="mb-2">
+                      <div className="text-lg font-bold tracking-wider print:text-base">L A K O P I</div>
+                      <div className="text-xs italic print:text-[10px]">"Malaysians Favourite Kopihouse"</div>
+                      <div className="text-xs print:text-[10px]">Ara Damansara • Selangor</div>
+                    </div>
+                    
+                    <div className="border-t border-b border-black my-3 py-2">
+                      ════════════════════════════════════════════════════════════
+                    </div>
+                    
+                    {/* Date, Time, Bill Number */}
+                    <div className="text-left mb-2 space-y-1">
+                      <div className="flex justify-between">
+                        <span>DATE: {dateStr}</span>
+                        <span>TIME: {timeStr}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>BILL: {receiptNo}</span>
+                        <span></span>
+                      </div>
+                      <div>CASHIER: {cashierName}</div>
+                    </div>
+                    
+                    <div className="border-t border-b border-black my-2 py-1">
+                      ════════════════════════════════════════════════════════════
+                    </div>
+                    
+                    {/* Items Header */}
+                    <div className="text-left mb-1 font-semibold">
+                      <div className="flex justify-between">
+                        <span className="w-48">ITEM</span>
+                        <span className="w-12 text-center">QTY</span>
+                        <span className="w-20 text-right">TOTAL (RM)</span>
+                      </div>
+                    </div>
+                    
+                    <div className="border-b border-dashed border-gray-400 mb-2 pb-1">
+                      ────────────────────────────────────────────────────────────
+                    </div>
+                    
+                    {/* Items List */}
+                    <div className="text-left mb-2 space-y-1 min-h-[100px]">
+                      {allItems.map((item, idx) => {
+                        const itemName = item.name.length > 30 ? item.name.substring(0, 27) + '...' : item.name
+                        const itemTotal = (item.price * item.quantity).toFixed(2)
+                        return (
+                          <div key={idx} className="flex justify-between">
+                            <span className="w-48 truncate">{itemName}</span>
+                            <span className="w-12 text-center">{item.quantity}</span>
+                            <span className="w-20 text-right">{itemTotal}</span>
+                          </div>
+                        )
+                      })}
+                    </div>
+                    
+                    <div className="border-b border-dashed border-gray-400 mb-2 pb-1">
+                      ────────────────────────────────────────────────────────────
+                    </div>
+                    
+                    {/* Totals */}
+                    <div className="text-left space-y-1 mb-2">
+                      <div className="flex justify-between">
+                        <span>SUBTOTAL</span>
+                        <span className="font-semibold">{subtotal.toFixed(2)}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>SERVICE CHARGE (10%)</span>
+                        <span className="font-semibold">{serviceCharge.toFixed(2)}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>SST (6%)</span>
+                        <span className="font-semibold">{sst.toFixed(2)}</span>
+                      </div>
+                    </div>
+                    
+                    <div className="border-t border-b border-black my-2 py-1">
+                      ════════════════════════════════════════════════════════════
+                    </div>
+                    
+                    {/* Grand Total */}
+                    <div className="text-left mb-2">
+                      <div className="flex justify-between font-bold text-lg">
+                        <span>GRAND TOTAL</span>
+                        <span>RM {grandTotal.toFixed(2)}</span>
+                      </div>
+                    </div>
+                    
+                    <div className="border-t border-b border-black my-2 py-1">
+                      ════════════════════════════════════════════════════════════
+                    </div>
+                    
+                    {/* Payment Info */}
+                    <div className="text-left space-y-1 mb-2">
+                      <div className="flex justify-between">
+                        <span>PAYMENT METHOD:</span>
+                        <span className="font-semibold">{paymentMethod}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>AMOUNT PAID:</span>
+                        <span className="font-semibold">RM {amountPaid.toFixed(2)}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>BALANCE:</span>
+                        <span className={`font-semibold ${change >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                          RM {change >= 0 ? change.toFixed(2) : '0.00'}
+                        </span>
+                      </div>
+                    </div>
+                    
+                    <div className="border-t border-b border-black my-2 py-1">
+                      ════════════════════════════════════════════════════════════
+                    </div>
+                    
+                    {/* Footer */}
+                    <div className="text-center space-y-1 mt-2">
+                      <div className="font-semibold">THANK YOU FOR DINING WITH US AT LAKOPI! 😊</div>
+                      <div className="text-xs">Powered by DewX IT Solutions</div>
+                      <div className="text-xs">Email: dewmika.my@gmail.com</div>
+                    </div>
+                    
+                    <div className="border-t border-b border-black my-2 py-1">
+                      ════════════════════════════════════════════════════════════
+                    </div>
+                  </div>
+                </div>
+                
+                {/* Action Buttons (Hidden when printing) */}
+                <div className="p-6 pt-0 print:hidden space-y-3">
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-xs font-semibold text-green-800 mb-1">Cashier Name</label>
+                      <input
+                        type="text"
+                        value={cashierName}
+                        onChange={(e) => setCashierName(e.target.value)}
+                        className="w-full px-3 py-2 border-2 border-green-200 rounded-lg text-sm focus:border-green-500 focus:outline-none"
+                        placeholder="Cashier name"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-green-800 mb-1">Payment Method</label>
+                      <select
+                        value={paymentMethod}
+                        onChange={(e) => setPaymentMethod(e.target.value)}
+                        className="w-full px-3 py-2 border-2 border-green-200 rounded-lg text-sm focus:border-green-500 focus:outline-none"
+                      >
+                        <option value="Cash">Cash</option>
+                        <option value="Card">Card</option>
+                        <option value="QR">QR</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-green-800 mb-1">Amount Paid (RM)</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={amountPaid}
+                      onChange={(e) => setAmountPaid(parseFloat(e.target.value) || 0)}
+                      className="w-full px-3 py-2 border-2 border-green-200 rounded-lg text-sm focus:border-green-500 focus:outline-none"
+                      placeholder="0.00"
+                    />
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => {
+                        window.print()
+                      }}
+                      className="flex-1 bg-green-600 text-white py-2 rounded-lg font-semibold hover:bg-green-700 transition-colors"
+                    >
+                      Print Bill
+                    </button>
+                    <button
+                      onClick={() => {
+                        setShowBill(false)
+                        setAmountPaid(0)
+                        setPaymentMethod('Cash')
+                      }}
+                      className="flex-1 bg-gray-200 text-gray-800 py-2 rounded-lg font-semibold hover:bg-gray-300 transition-colors"
+                    >
+                      Close
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )
+        })()}
 
         {/* Orders List */}
         {viewMode === 'orders' && (
@@ -1495,6 +2178,7 @@ const Dashboard = () => {
           </div>
         </div>
       )}
+      </div>
     </div>
   )
 }
