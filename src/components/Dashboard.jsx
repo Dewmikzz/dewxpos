@@ -32,6 +32,7 @@ import {
   Receipt as ReceiptIcon
 } from 'lucide-react'
 import { storage } from '../utils/storage'
+import { firebaseStorage } from '../utils/firebaseStorage'
 import { getMenuItems, saveMenuItems, defaultMenuItems, categories } from '../data/menu'
 
 const Dashboard = () => {
@@ -62,10 +63,11 @@ const Dashboard = () => {
     description: ''
   })
   const [notifications, setNotifications] = useState([])
-  const [previousOrderIds, setPreviousOrderIds] = useState(new Set())
   const [soundEnabled, setSoundEnabled] = useState(true)
   // Track which orders have already triggered sound notification (prevent looping)
   const notifiedOrderIds = useRef(new Set())
+  // Track previous order IDs for change detection (use ref to avoid stale closure issues)
+  const previousOrderIds = useRef(new Set())
   // Store AudioContext reference for initialization
   const audioContextRef = useRef(null)
 
@@ -82,6 +84,20 @@ const Dashboard = () => {
     
     loadOrders()
     loadMenuItems()
+    
+    // Set up Firebase real-time listener for cross-device sync
+    let firebaseUnsubscribe = null
+    if (firebaseStorage.isFirebaseAvailable()) {
+      console.log('✅ Setting up Firebase real-time listener for orders')
+      firebaseUnsubscribe = firebaseStorage.onOrdersChange((orders) => {
+        console.log('📡 Firebase: Orders updated in real-time:', orders?.length || 0, 'orders')
+        if (orders && Array.isArray(orders)) {
+          loadOrdersFromData(orders)
+        }
+      })
+    } else {
+      console.log('⚠️ Firebase not available - using localStorage polling (single-device mode)')
+    }
     
     // Initialize AudioContext on user interaction (required by browser autoplay policy)
     const initAudioContext = () => {
@@ -133,16 +149,21 @@ const Dashboard = () => {
     
     // Listen for storage updates
     const handleStorageUpdate = (event) => {
+      console.log('handleStorageUpdate called with event:', event)
       // Check if this is an orders update
+      const eventKey = event?.detail?.key || event?.key
       const isOrdersUpdate = event && (
-        (event.detail && event.detail.key === 'lakopi_shared_orders') ||
-        (event.key === 'lakopi_shared_orders')
+        eventKey === 'lakopi_shared_orders'
       )
+      
+      console.log('Event key:', eventKey, 'Is orders update?', isOrdersUpdate)
       
       if (isOrdersUpdate || !event) {
         // If no event details, reload anyway (might be from custom event)
-        console.log('Storage update detected, reloading orders...', event?.detail || event?.key)
-        loadOrders()
+        console.log('📦 Storage update detected, reloading orders...', event?.detail || event?.key)
+        setTimeout(() => {
+          loadOrders()
+        }, 100) // Small delay to ensure storage is written
       }
     }
     
@@ -154,9 +175,12 @@ const Dashboard = () => {
     window.addEventListener('storageUpdate', handleStorageUpdate)
     // Listen to native storage events (other tabs/windows)
     window.addEventListener('storage', (e) => {
+      console.log('Native storage event received:', e.key, e.newValue ? 'has new value' : 'no new value')
       if (e.key === 'lakopi_shared_orders') {
-        console.log('Native storage event detected, reloading orders...')
-        loadOrders()
+        console.log('📦 Native storage event detected for orders, reloading...')
+        setTimeout(() => {
+          loadOrders()
+        }, 100) // Small delay to ensure storage is written
       }
     })
     window.addEventListener('menuUpdate', handleMenuUpdate)
@@ -181,6 +205,11 @@ const Dashboard = () => {
       if (audioContextRef.current) {
         audioContextRef.current.close().catch(() => {})
       }
+      // Cleanup Firebase listeners
+      if (firebaseUnsubscribe) {
+        firebaseUnsubscribe()
+      }
+      firebaseStorage.cleanup()
     }
   }, [])
 
@@ -298,81 +327,105 @@ const Dashboard = () => {
           }
           
           // Resume AudioContext if suspended (required by browser autoplay policy)
-          if (ctx.state === 'suspended') {
-            console.log('AudioContext is suspended, attempting to resume...')
-            try {
-              await ctx.resume()
-              console.log('AudioContext resumed for notification sound, state:', ctx.state)
-            } catch (error) {
-              console.error('Error resuming AudioContext:', error)
-              throw error
+          // Keep trying until it's running or give up after a few attempts
+          let attempts = 0
+          const maxAttempts = 5
+          while (ctx.state !== 'running' && attempts < maxAttempts) {
+            if (ctx.state === 'suspended') {
+              console.log(`AudioContext is suspended, attempting to resume (attempt ${attempts + 1}/${maxAttempts})...`)
+              try {
+                await ctx.resume()
+                // Wait a bit for the context to stabilize
+                await new Promise(resolve => setTimeout(resolve, 50))
+                console.log('AudioContext state after resume:', ctx.state)
+              } catch (error) {
+                console.error('Error resuming AudioContext:', error)
+                attempts++
+                if (attempts >= maxAttempts) {
+                  throw new Error('Failed to resume AudioContext after multiple attempts')
+                }
+                // Wait before retrying
+                await new Promise(resolve => setTimeout(resolve, 100))
+                continue
+              }
+            } else if (ctx.state === 'closed') {
+              console.log('AudioContext is closed, creating new one...')
+              ctx = new (window.AudioContext || window.webkitAudioContext)()
+              audioContextRef.current = ctx
             }
-          } else {
-            console.log('AudioContext state:', ctx.state)
+            attempts++
           }
           
-          // Double-check context is running
+          // Final check - if still not running, log warning but try anyway
           if (ctx.state !== 'running') {
-            console.warn('AudioContext is not running, attempting to resume again...')
-            await ctx.resume()
+            console.warn('AudioContext is not in running state:', ctx.state, '- attempting to play sound anyway')
+          } else {
+            console.log('AudioContext is ready, state:', ctx.state)
           }
           
           // "Ding" - higher, softer tone
           const ding = () => {
-            const oscillator = ctx.createOscillator()
-            const gainNode = ctx.createGain()
-            
-            oscillator.connect(gainNode)
-            gainNode.connect(ctx.destination)
-            
-            // Soft, pleasant higher tone
-            oscillator.frequency.value = 880 // A5 - pleasant, modern tone
-            oscillator.type = 'sine' // Smooth sine wave for soft sound
-            
-            const now = ctx.currentTime
-            // Soft attack and decay for gentle sound
-            gainNode.gain.setValueAtTime(0, now)
-            gainNode.gain.linearRampToValueAtTime(0.4, now + 0.05) // Soft volume
-            gainNode.gain.exponentialRampToValueAtTime(0.01, now + 0.25) // Gentle fade
-            
-            oscillator.start(now)
-            oscillator.stop(now + 0.25)
+            try {
+              const oscillator = ctx.createOscillator()
+              const gainNode = ctx.createGain()
+              
+              oscillator.connect(gainNode)
+              gainNode.connect(ctx.destination)
+              
+              // Soft, pleasant higher tone
+              oscillator.frequency.value = 880 // A5 - pleasant, modern tone
+              oscillator.type = 'sine' // Smooth sine wave for soft sound
+              
+              const now = ctx.currentTime
+              // Soft attack and decay for gentle sound
+              gainNode.gain.setValueAtTime(0, now)
+              gainNode.gain.linearRampToValueAtTime(0.4, now + 0.05) // Soft volume
+              gainNode.gain.exponentialRampToValueAtTime(0.01, now + 0.25) // Gentle fade
+              
+              oscillator.start(now)
+              oscillator.stop(now + 0.25)
+              console.log('Ding sound started')
+            } catch (error) {
+              console.error('Error playing ding sound:', error)
+            }
           }
           
           // "Dong" - lower, softer tone
           const dong = () => {
-            const oscillator = ctx.createOscillator()
-            const gainNode = ctx.createGain()
-            
-            oscillator.connect(gainNode)
-            gainNode.connect(ctx.destination)
-            
-            // Soft, pleasant lower tone
-            oscillator.frequency.value = 660 // E5 - harmonious lower tone
-            oscillator.type = 'sine' // Smooth sine wave for soft sound
-            
-            const now = ctx.currentTime + 0.3 // 300ms after ding starts
-            // Soft attack and decay for gentle sound
-            gainNode.gain.setValueAtTime(0, now)
-            gainNode.gain.linearRampToValueAtTime(0.4, now + 0.05) // Soft volume
-            gainNode.gain.exponentialRampToValueAtTime(0.01, now + 0.3) // Gentle fade
-            
-            oscillator.start(now)
-            oscillator.stop(now + 0.3)
+            try {
+              const oscillator = ctx.createOscillator()
+              const gainNode = ctx.createGain()
+              
+              oscillator.connect(gainNode)
+              gainNode.connect(ctx.destination)
+              
+              // Soft, pleasant lower tone
+              oscillator.frequency.value = 660 // E5 - harmonious lower tone
+              oscillator.type = 'sine' // Smooth sine wave for soft sound
+              
+              const now = ctx.currentTime + 0.3 // 300ms after ding starts
+              // Soft attack and decay for gentle sound
+              gainNode.gain.setValueAtTime(0, now)
+              gainNode.gain.linearRampToValueAtTime(0.4, now + 0.05) // Soft volume
+              gainNode.gain.exponentialRampToValueAtTime(0.01, now + 0.3) // Gentle fade
+              
+              oscillator.start(now)
+              oscillator.stop(now + 0.3)
+              console.log('Dong sound started')
+            } catch (error) {
+              console.error('Error playing dong sound:', error)
+            }
           }
           
-          // Ensure context is running before playing sounds
-          if (ctx.state === 'suspended') {
-            await ctx.resume()
-          }
-          
+          // Play sounds
           ding()
           dong()
           
-          console.log('Ding dong sound started')
+          console.log('Ding dong sound sequence started')
           return ctx
         } catch (error) {
           console.error('Could not play ding dong sound:', error)
+          playNotificationSound.isPlaying = false
           return null
         }
       }
@@ -485,30 +538,52 @@ const Dashboard = () => {
     }, 5000)
   }
 
-  const loadOrders = () => {
-    const loadedOrders = storage.get('orders', true) || []
+  // Process orders data and detect new orders (shared function)
+  const loadOrdersFromData = (loadedOrders) => {
+    if (!Array.isArray(loadedOrders)) {
+      console.warn('loadOrdersFromData: Invalid orders data', loadedOrders)
+      return
+    }
+    
+    console.log('loadOrdersFromData called - Total orders:', loadedOrders.length)
+    
     // Sort by timestamp (newest first)
     const sortedOrders = [...loadedOrders].sort((a, b) => 
       new Date(b.timestamp) - new Date(a.timestamp)
     )
     
     const currentOrderIds = new Set(sortedOrders.map(o => o.id))
+    const isFirstLoad = previousOrderIds.current.size === 0
+    
+    console.log('Current order IDs:', Array.from(currentOrderIds))
+    console.log('Previous order IDs:', Array.from(previousOrderIds.current))
+    console.log('Is first load?', isFirstLoad)
     
     // Detect new orders (works even on first load by checking if previousOrderIds is empty)
-    if (previousOrderIds.size > 0) {
+    if (!isFirstLoad) {
       // Filter new orders that haven't been notified yet
-      const newOrders = sortedOrders.filter(order => 
-        !previousOrderIds.has(order.id) && 
-        order.status === 'Pending' &&
-        !notifiedOrderIds.current.has(order.id) // Only orders that haven't triggered notification
-      )
+      const newOrders = sortedOrders.filter(order => {
+        const isNew = !previousOrderIds.current.has(order.id)
+        const isPending = order.status === 'Pending'
+        const notNotified = !notifiedOrderIds.current.has(order.id)
+        const shouldNotify = isNew && isPending && notNotified
+        
+        if (isNew) {
+          console.log(`Order ${order.id} is new. Status: ${order.status}, Already notified: ${notifiedOrderIds.current.has(order.id)}`)
+        }
+        
+        return shouldNotify
+      })
+      
+      console.log('New orders found:', newOrders.length, newOrders.map(o => ({ id: o.id, table: o.tableNumber, status: o.status })))
       
       // Show notification and play sound for new orders (only once per order, not looping)
       if (newOrders.length > 0) {
-        console.log('New orders detected:', newOrders.length)
+        console.log('🎉 NEW ORDERS DETECTED:', newOrders.length)
         
         // Mark these orders as notified to prevent looping
         newOrders.forEach((order) => {
+          console.log('Marking order as notified:', order.id)
           notifiedOrderIds.current.add(order.id)
           showNotification(order)
         })
@@ -516,41 +591,83 @@ const Dashboard = () => {
         // Play sound only once (not looping) - regardless of how many new orders
         // Only if sound is not already playing
         if (!playNotificationSound.isPlaying) {
-          console.log('Triggering notification sound for new orders')
+          console.log('🔔 Triggering notification sound for new orders')
           // Ensure AudioContext is initialized before playing
           if (!audioContextRef.current || audioContextRef.current.state === 'closed') {
             try {
               const ctx = new (window.AudioContext || window.webkitAudioContext)()
               audioContextRef.current = ctx
-              console.log('Created new AudioContext for notification')
+              console.log('Created new AudioContext for notification, state:', ctx.state)
             } catch (error) {
               console.error('Error creating AudioContext:', error)
             }
+          } else {
+            console.log('AudioContext exists, state:', audioContextRef.current.state)
           }
           playNotificationSound()
         } else {
           console.log('Sound already playing, skipping')
         }
+      } else {
+        console.log('No new orders to notify')
       }
     } else {
       // First load: Initialize previousOrderIds with current orders
       // Also mark all existing pending orders as notified to prevent false notifications
+      console.log('First load - initializing previousOrderIds and marking existing orders as notified')
       sortedOrders.forEach(order => {
         if (order.status === 'Pending') {
           notifiedOrderIds.current.add(order.id)
+          console.log('Marked existing pending order as notified:', order.id)
         }
       })
     }
     
-    setPreviousOrderIds(currentOrderIds)
+    // Update previousOrderIds ref (not state, to avoid stale closure issues)
+    previousOrderIds.current = currentOrderIds
     setOrders(sortedOrders)
+    console.log('loadOrdersFromData completed. Previous order IDs updated to:', Array.from(previousOrderIds.current))
   }
 
-  const updateOrderStatus = (orderId, newStatus) => {
+  const loadOrders = async () => {
+    let loadedOrders = []
+    
+    // Try Firebase first if available
+    if (firebaseStorage.isFirebaseAvailable()) {
+      try {
+        loadedOrders = await firebaseStorage.get('orders', true) || []
+        console.log('✅ Loaded orders from Firebase:', loadedOrders.length)
+      } catch (error) {
+        console.error('Error loading from Firebase, falling back to localStorage:', error)
+        loadedOrders = storage.get('orders', true) || []
+      }
+    } else {
+      // Fallback to localStorage
+      loadedOrders = storage.get('orders', true) || []
+      console.log('Loaded orders from localStorage:', loadedOrders.length)
+    }
+    
+    loadOrdersFromData(loadedOrders)
+  }
+
+  const updateOrderStatus = async (orderId, newStatus) => {
     const updatedOrders = orders.map(order =>
       order.id === orderId ? { ...order, status: newStatus } : order
     )
-    storage.set('orders', updatedOrders, true)
+    
+    // Save to Firebase if available, otherwise localStorage
+    if (firebaseStorage.isFirebaseAvailable()) {
+      try {
+        await firebaseStorage.set('orders', updatedOrders, true)
+        console.log('✅ Order status updated in Firebase')
+      } catch (error) {
+        console.error('Error updating order in Firebase:', error)
+        storage.set('orders', updatedOrders, true)
+      }
+    } else {
+      storage.set('orders', updatedOrders, true)
+    }
+    
     setOrders(updatedOrders)
     // Only clear selected order if it's the one being updated
     if (selectedOrder && selectedOrder.id === orderId) {
@@ -558,10 +675,23 @@ const Dashboard = () => {
     }
   }
 
-  const deleteOrder = (orderId) => {
+  const deleteOrder = async (orderId) => {
     if (window.confirm('Are you sure you want to delete this order?')) {
       const updatedOrders = orders.filter(order => order.id !== orderId)
-      storage.set('orders', updatedOrders, true)
+      
+      // Save to Firebase if available, otherwise localStorage
+      if (firebaseStorage.isFirebaseAvailable()) {
+        try {
+          await firebaseStorage.set('orders', updatedOrders, true)
+          console.log('✅ Order deleted from Firebase')
+        } catch (error) {
+          console.error('Error deleting order from Firebase:', error)
+          storage.set('orders', updatedOrders, true)
+        }
+      } else {
+        storage.set('orders', updatedOrders, true)
+      }
+      
       setOrders(updatedOrders)
       setSelectedOrder(null)
     }

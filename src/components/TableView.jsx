@@ -3,6 +3,7 @@ import { useParams } from 'react-router-dom'
 import { ShoppingCart, Plus, Minus, X, CheckCircle } from 'lucide-react'
 import { getMenuItems, categories } from '../data/menu'
 import { storage } from '../utils/storage'
+import { firebaseStorage } from '../utils/firebaseStorage'
 import Logo from './Logo'
 
 const TableView = () => {
@@ -93,7 +94,7 @@ const TableView = () => {
     return cart.reduce((sum, item) => sum + (item.price * item.quantity), 0)
   }
 
-  const placeOrder = () => {
+  const placeOrder = async () => {
     if (cart.length === 0) return
 
     const newOrder = {
@@ -110,30 +111,46 @@ const TableView = () => {
       timestamp: new Date().toISOString(),
     }
 
-    const existingOrders = storage.get('orders', true) || []
-    const updatedOrders = [...existingOrders, newOrder]
+    console.log('📝 Placing order:', newOrder.id, 'Table:', newOrder.tableNumber)
+    console.log('🌐 Firebase available?', firebaseStorage.isFirebaseAvailable())
     
-    // Save to storage (this will dispatch the storageUpdate event)
-    storage.set('orders', updatedOrders, true)
-    
-    // Manually trigger storage event for cross-tab communication
-    // The native storage event only fires in OTHER tabs, so we need to manually trigger it
-    // by setting a dummy value and then setting the real value
-    const storageKey = 'lakopi_shared_orders'
-    const oldValue = localStorage.getItem(storageKey)
-    localStorage.setItem(storageKey, JSON.stringify(updatedOrders))
-    
-    // Also dispatch custom event explicitly for same-tab listeners
-    window.dispatchEvent(new CustomEvent('storageUpdate', {
-      detail: { key: storageKey, value: updatedOrders }
-    }))
-    
-    console.log('Order placed:', newOrder.id, 'Total orders:', updatedOrders.length)
-    
-    setOrderId(newOrder.id)
-    setOrderPlaced(true)
-    setCart([])
-    setShowCart(false)
+    try {
+      // Try Firebase first (cross-device sync)
+      if (firebaseStorage.isFirebaseAvailable()) {
+        console.log('✅ Using Firebase for cross-device sync')
+        const existingOrders = await firebaseStorage.get('orders', true) || []
+        const updatedOrders = [...existingOrders, newOrder]
+        await firebaseStorage.set('orders', updatedOrders, true)
+        console.log('✅ Order saved to Firebase - will sync to all devices')
+      } else {
+        // Fallback to localStorage (single-device mode)
+        console.log('⚠️ Firebase not available - using localStorage (single-device only)')
+        const existingOrders = storage.get('orders', true) || []
+        const updatedOrders = [...existingOrders, newOrder]
+        
+        storage.set('orders', updatedOrders, true)
+        
+        // Manually trigger storage event for cross-tab communication
+        const storageKey = 'lakopi_shared_orders'
+        localStorage.setItem(storageKey, JSON.stringify(updatedOrders))
+        
+        // Dispatch custom event for same-tab listeners
+        window.dispatchEvent(new CustomEvent('storageUpdate', {
+          detail: { key: storageKey, value: updatedOrders }
+        }))
+        console.log('✅ Order saved to localStorage')
+      }
+      
+      console.log('✅ Order placement complete:', newOrder.id)
+      
+      setOrderId(newOrder.id)
+      setOrderPlaced(true)
+      setCart([])
+      setShowCart(false)
+    } catch (error) {
+      console.error('❌ Error placing order:', error)
+      alert('Error placing order. Please try again.')
+    }
   }
 
   const handleNewOrder = () => {
